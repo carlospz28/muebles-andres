@@ -56,12 +56,16 @@ class ExpensesRepository {
         .write(ExpenseCategoriesCompanion(isActive: Value(active)));
   }
 
-  /// Registra un gasto y automáticamente descuenta la caja (efectivo).
+  /// Registra un gasto y automáticamente descuenta la caja — en efectivo,
+  /// o de una cuenta de consignación si así se paga (ej. una transferencia
+  /// para pagar el arriendo).
   Future<void> addExpense({
     required int categoryId,
     required String description,
     required int amount,
     String note = '',
+    String method = 'CASH',
+    int? accountId,
   }) async {
     await _db.transaction(() async {
       final expenseId = await _db.into(_db.expenses).insert(
@@ -70,6 +74,8 @@ class ExpensesRepository {
               description: Value(description),
               amount: amount,
               note: Value(note),
+              method: Value(method),
+              accountId: Value(accountId),
             ),
           );
 
@@ -77,6 +83,7 @@ class ExpensesRepository {
             CashMovementsCompanion.insert(
               type: 'EXPENSE',
               amount: -amount,
+              method: Value(method),
               detail: Value(description),
               refType: 'EXPENSE',
               refId: expenseId,

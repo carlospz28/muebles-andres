@@ -28,6 +28,11 @@ class Suppliers extends Table {
   TextColumn get document => text().nullable()();
   TextColumn get phone => text().nullable()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+
+  /// Deuda que ya existía con este proveedor antes de empezar a usar la
+  /// app (para cargar proveedores que ya se les debía algo). Se suma a lo
+  /// comprado desde acá para calcular la deuda total.
+  IntColumn get openingBalance => integer().withDefault(const Constant(0))();
 }
 
 /// Cuentas bancarias/destinos a los que se les hacen consignaciones
@@ -39,4 +44,16 @@ class PaymentAccounts extends Table {
   TextColumn get bankName => text().withDefault(const Constant(''))();
   TextColumn get accountNumber => text().withDefault(const Constant(''))();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+}
+
+/// Retiro de dinero de una cuenta de consignación (ej. sacar del banco
+/// para tener efectivo en la caja). Reduce el saldo de la cuenta; el
+/// dinero retirado se registra como ingreso de efectivo en el libro de
+/// caja, porque pasa a ser billete físico disponible.
+class AccountWithdrawals extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get accountId => integer().references(PaymentAccounts, #id)();
+  DateTimeColumn get date => dateTime().withDefault(currentDateAndTime)();
+  IntColumn get amount => integer()();
+  TextColumn get note => text().withDefault(const Constant(''))();
 }

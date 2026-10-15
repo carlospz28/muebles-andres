@@ -8,7 +8,6 @@ import '../../core/providers.dart';
 import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import '../sales/payment_dialog.dart';
-import '../sales/sale_form_screen.dart';
 import 'layaways_providers.dart';
 
 class LayawayFormScreen extends ConsumerWidget {
@@ -116,13 +115,23 @@ class LayawayFormScreen extends ConsumerWidget {
                     final price = ThousandsInputFormatter.parse(priceCtrl.text);
                     if (qty <= 0 || price <= 0) return;
                     try {
-                      await ref.read(layawaysRepositoryProvider).addItem(
+                      final shortage = await ref.read(layawaysRepositoryProvider).addItem(
                             layawayId: layawayId,
                             productId: selected!.id,
                             quantity: qty,
                             unitPrice: price,
                           );
                       if (dialogContext.mounted) Navigator.pop(dialogContext);
+                      if (shortage > 0 && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Aviso: faltan $shortage unidades en inventario para '
+                              'completar este apartado.',
+                            ),
+                          ),
+                        );
+                      }
                     } catch (e) {
                       if (dialogContext.mounted) {
                         ScaffoldMessenger.of(dialogContext)
@@ -143,9 +152,10 @@ class LayawayFormScreen extends ConsumerWidget {
     final picked = await showKitPickerDialog(context, ref);
     if (picked == null) return;
 
+    var totalShortage = 0;
     for (final item in picked.items) {
       try {
-        await ref.read(layawaysRepositoryProvider).addItem(
+        totalShortage += await ref.read(layawaysRepositoryProvider).addItem(
               layawayId: layawayId,
               productId: item.productId,
               quantity: item.quantity,
@@ -159,6 +169,16 @@ class LayawayFormScreen extends ConsumerWidget {
         }
       }
     }
+    if (totalShortage > 0 && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Aviso: faltan $totalShortage unidades en inventario para completar '
+            'este apartado.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _addPayment(
@@ -167,13 +187,14 @@ class LayawayFormScreen extends ConsumerWidget {
     int balance,
     int? employeeId,
   ) async {
-    final lines = await showPaymentDialog(
+    final result = await showPaymentDialog(
       context,
       totalToPay: balance,
       title: 'Registrar abono',
       allowPartial: true,
+      showSupplierOption: true,
     );
-    if (lines == null) return;
+    if (result == null) return;
     if (!context.mounted) return;
 
     var defaultRate = 0.0;
@@ -215,17 +236,22 @@ class LayawayFormScreen extends ConsumerWidget {
 
     await ref.read(layawaysRepositoryProvider).addPayment(
           layawayId: layawayId,
-          paymentLines: lines,
+          paymentLines: result.lines,
           commissionRate: rate ?? 0,
         );
   }
 
   Future<void> _invoice(BuildContext context, WidgetRef ref) async {
     try {
-      final saleId = await ref.read(layawaysRepositoryProvider).invoiceToSale(layawayId);
+      await ref.read(layawaysRepositoryProvider).invoiceToSale(layawayId);
       if (context.mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => SaleFormScreen(saleId: saleId)),
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Apartado facturado. Actívalo como "Entregado al cliente" cuando '
+              'reciba el mueble — ahí se descuenta el inventario.',
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -304,7 +330,11 @@ class LayawayFormScreen extends ConsumerWidget {
           .get();
       for (final l in lines) {
         paymentLines.add(ReceiptPaymentLine(
-          label: l.method == 'CASH' ? 'Efectivo' : 'Consignación',
+          label: l.method == 'CASH'
+              ? 'Efectivo'
+              : l.method == 'SUPPLIER'
+                  ? 'Proveedores'
+                  : 'Consignación',
           amount: l.amount,
         ));
       }
@@ -410,12 +440,18 @@ class LayawayFormScreen extends ConsumerWidget {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Entregado al cliente'),
-                  subtitle: const Text(
-                    'Puede terminar de pagar y reclamar el mueble días después.',
+                  subtitle: Text(
+                    layaway.state != 'INVOICED'
+                        ? 'Se activa cuando el apartado ya esté facturado (saldo en \$0).'
+                        : layaway.delivered
+                            ? 'Inventario ya descontado.'
+                            : 'Puede terminar de pagar y reclamar el mueble días después. '
+                                'Al activarlo se descuenta el inventario real.',
                   ),
                   value: layaway.delivered,
-                  onChanged: (v) =>
-                      ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v),
+                  onChanged: (layaway.state == 'INVOICED' && !layaway.delivered)
+                      ? (v) => ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v)
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 Text('Historial de abonos', style: Theme.of(context).textTheme.titleMedium),

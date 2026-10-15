@@ -15,7 +15,9 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.mueblesandres.muebles_andres"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker (vía flutter_plugin_android_lifecycle) exige compileSdk 36
+    // o más — el que trae Flutter por defecto (34) no alcanza.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -84,6 +84,7 @@ class LayawaysScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Apartados')),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'layaways',
         onPressed: () => _startNewLayaway(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo apartado'),

@@ -26,15 +26,22 @@ class Payments extends Table {
   IntColumn get commissionAmount => integer().withDefault(const Constant(0))();
 }
 
-/// Cada línea de un Payment: método (efectivo o consignación) + monto +
-/// cuenta destino si es consignación.
+/// Cada línea de un Payment: método (efectivo, consignación, o pago
+/// directo a un proveedor) + monto + cuenta destino si es consignación /
+/// proveedor si es pago directo.
 class PaymentLines extends Table {
   IntColumn get id => integer().autoIncrement()();
   IntColumn get paymentId => integer().references(Payments, #id)();
 
-  /// 'CASH' | 'CONSIGNMENT'
+  /// 'CASH' | 'CONSIGNMENT' | 'SUPPLIER'
   TextColumn get method => text()();
   IntColumn get amount => integer()();
   IntColumn get accountId =>
       integer().nullable().references(PaymentAccounts, #id)();
+
+  /// Proveedor al que se le mandó la plata directamente (cuando method es
+  /// 'SUPPLIER') — el cliente paga y esa plata nunca pasa por la caja ni
+  /// una cuenta propia, va directo a cubrir la deuda con ese proveedor.
+  IntColumn get supplierId =>
+      integer().nullable().references(Suppliers, #id)();
 }

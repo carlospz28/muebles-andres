@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers.dart';
+import '../audit/audit_screen.dart';
 import '../auth/login_screen.dart';
 import '../expenses/expenses_screen.dart';
 import '../inventory/inventory_screen.dart';
@@ -10,9 +11,11 @@ import '../layaways/layaways_screen.dart';
 import '../people/commissions_screen.dart';
 import '../people/payment_accounts_screen.dart';
 import '../people/suppliers_screen.dart';
+import '../production/production_screen.dart';
 import '../purchases/purchases_screen.dart';
 import '../reports/reports_screen.dart';
 import '../sales/sales_screen.dart';
+import '../settings/settings_screen.dart';
 import 'home_screen.dart';
 
 class _Destination {
@@ -52,6 +55,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       (_) => const KitsScreen(),
     ),
     _Destination(
+      'Producción',
+      Icons.precision_manufacturing_outlined,
+      (_) => const ProductionScreen(),
+    ),
+    _Destination(
       'Inventario',
       Icons.inventory_2_outlined,
       (_) => const InventoryScreen(),
@@ -85,6 +93,16 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       'Análisis',
       Icons.bar_chart_outlined,
       (_) => const ReportsScreen(),
+    ),
+    _Destination(
+      'Auditoría',
+      Icons.fact_check_outlined,
+      (_) => const AuditScreen(),
+    ),
+    _Destination(
+      'Ajustes',
+      Icons.settings_outlined,
+      (_) => const SettingsScreen(),
     ),
   ];
 

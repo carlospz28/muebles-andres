@@ -75,6 +75,7 @@ class PaymentAccountsScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'paymentAccounts',
         onPressed: () => _openForm(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nueva cuenta'),

@@ -192,18 +192,23 @@ class SaleFormScreen extends ConsumerWidget {
   }
 
   Future<void> _confirmSale(BuildContext context, WidgetRef ref, Sale sale) async {
-    final lines = await showPaymentDialog(
+    final result = await showPaymentDialog(
       context,
       totalToPay: sale.total,
       title: 'Cobrar venta ${sale.number}',
+      showDeliveredOption: true,
+      showSupplierOption: true,
     );
-    if (lines == null) return;
+    if (result == null) return;
 
     try {
       await ref.read(salesRepositoryProvider).confirmSale(
             saleId: saleId,
-            paymentLines: lines,
+            paymentLines: result.lines,
           );
+      if (result.delivered) {
+        await ref.read(salesRepositoryProvider).setDelivered(saleId, true);
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
@@ -265,7 +270,11 @@ class SaleFormScreen extends ConsumerWidget {
           .get();
       for (final l in lines) {
         paymentLines.add(ReceiptPaymentLine(
-          label: l.method == 'CASH' ? 'Efectivo' : 'Consignación',
+          label: l.method == 'CASH'
+              ? 'Efectivo'
+              : l.method == 'SUPPLIER'
+                  ? 'Proveedores'
+                  : 'Consignación',
           amount: l.amount,
         ));
       }

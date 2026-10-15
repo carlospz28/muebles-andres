@@ -12,6 +12,7 @@ import 'tables/kit_tables.dart';
 import 'tables/layaway_tables.dart';
 import 'tables/payment_tables.dart';
 import 'tables/people_tables.dart';
+import 'tables/production_tables.dart';
 import 'tables/purchase_tables.dart';
 import 'tables/sale_tables.dart';
 import 'tables/settings_tables.dart';
@@ -28,6 +29,7 @@ part 'database.g.dart';
     Employees,
     Suppliers,
     PaymentAccounts,
+    AccountWithdrawals,
     // Inventario
     Warehouses,
     Stock,
@@ -58,6 +60,9 @@ part 'database.g.dart';
     ExpenseCategories,
     Expenses,
     FixedAssets,
+    // Producción
+    ProductionOrders,
+    ProductionStages,
     // Configuración / login
     AppUser,
   ],
@@ -68,7 +73,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -83,6 +88,31 @@ class AppDatabase extends _$AppDatabase {
             // Comisión predeterminada por vendedor, para no tener que
             // escribirla a mano en cada venta/abono.
             await m.addColumn(employees, employees.defaultCommissionRate);
+          }
+          if (from < 4) {
+            // Retiros de cuentas de consignación (ver AccountWithdrawals).
+            await m.createTable(accountWithdrawals);
+          }
+          if (from < 5) {
+            // Deuda inicial de proveedores (para cargar los que ya se les
+            // debía algo antes de usar la app).
+            await m.addColumn(suppliers, suppliers.openingBalance);
+          }
+          if (from < 6) {
+            // Método de pago (efectivo o consignación) para los gastos.
+            await m.addColumn(expenses, expenses.method);
+            await m.addColumn(expenses, expenses.accountId);
+          }
+          if (from < 7) {
+            // Pago directo a un proveedor (sin pasar por la caja) como
+            // forma de pago de una venta o abono de apartado.
+            await m.addColumn(paymentLines, paymentLines.supplierId);
+          }
+          if (from < 8) {
+            // Fichas de producción: seguimiento del proceso de fabricación
+            // de un mueble (estructura, cortes, costura/tapizado).
+            await m.createTable(productionOrders);
+            await m.createTable(productionStages);
           }
         },
       );

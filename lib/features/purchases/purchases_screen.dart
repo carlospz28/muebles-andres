@@ -78,6 +78,7 @@ class PurchasesScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Compras')),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'purchases',
         onPressed: () => _startNewPurchase(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nueva compra'),

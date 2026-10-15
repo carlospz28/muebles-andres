@@ -62,6 +62,37 @@ final stockStreamProvider = StreamProvider.autoDispose<List<ProductStock>>((ref)
   });
 });
 
+/// Costo por producto del próximo lote que saldría (el más antiguo con
+/// existencia, porque el consumo es FIFO) — para mostrar en el catálogo
+/// cuánto cuesta reponer/vender cada producto en vez del precio de venta,
+/// sin dejar de manejar el costeo real por lotes.
+final productFifoCostProvider = StreamProvider.autoDispose<Map<int, int>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return (db.select(db.productLots)
+        ..where((l) => l.quantityRemaining.isBiggerThanValue(0))
+        ..orderBy([(l) => OrderingTerm.asc(l.receivedAt)]))
+      .watch()
+      .map((lots) {
+    final costByProduct = <int, int>{};
+    for (final l in lots) {
+      costByProduct.putIfAbsent(l.productId, () => l.unitCost);
+    }
+    return costByProduct;
+  });
+});
+
+/// Valor de todo lo que hay en inventario, a precio de costo (no de venta):
+/// suma de lo que queda de cada lote FIFO por su costo unitario real, que
+/// ya incluye transporte cuando lo hubo (ver CatalogRepository.addInventoryEntry
+/// y PurchasesRepository.confirmPurchase). Así el cliente sabe cuánta plata
+/// tiene "quieta" en mercancía, no cuánto valdría venderla.
+final inventoryCostValueProvider = StreamProvider.autoDispose<int>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.select(db.productLots).watch().map((lots) {
+    return lots.fold<int>(0, (sum, l) => sum + l.quantityRemaining * l.unitCost);
+  });
+});
+
 class CatalogRepository {
   CatalogRepository(this._db);
   final AppDatabase _db;
@@ -194,6 +225,74 @@ class CatalogRepository {
               note: Value(note.isEmpty ? 'Ingreso de inventario' : note),
             ),
           );
+    });
+  }
+
+  /// Retiro manual de inventario (dañado, extraviado, uso interno, etc.):
+  /// consume los lotes FIFO más antiguos primero (igual que una venta, para
+  /// que el costo restante en los lotes siga siendo correcto) y descuenta
+  /// stock físico. Al igual que el ingreso manual, NO toca caja — no hay
+  /// dinero de por medio, solo unidades que ya no están disponibles.
+  Future<void> removeInventory({
+    required int productId,
+    required int warehouseId,
+    required int quantity,
+    String note = '',
+  }) async {
+    await _db.transaction(() async {
+      final stock = await (_db.select(_db.stock)
+            ..where((s) =>
+                s.productId.equals(productId) & s.warehouseId.equals(warehouseId)))
+          .getSingleOrNull();
+
+      final available = (stock?.quantity ?? 0) - (stock?.reservedQuantity ?? 0);
+      if (available < quantity) {
+        throw StateError(
+          'Stock insuficiente (disponible: $available, solicitado: $quantity).',
+        );
+      }
+
+      var remainingToConsume = quantity;
+      final lots = await (_db.select(_db.productLots)
+            ..where((l) =>
+                l.productId.equals(productId) &
+                l.warehouseId.equals(warehouseId) &
+                l.quantityRemaining.isBiggerThanValue(0))
+            ..orderBy([(l) => OrderingTerm.asc(l.receivedAt)]))
+          .get();
+
+      for (final lot in lots) {
+        if (remainingToConsume <= 0) break;
+        final takeFromLot = remainingToConsume < lot.quantityRemaining
+            ? remainingToConsume
+            : lot.quantityRemaining;
+        if (takeFromLot <= 0) continue;
+
+        await (_db.update(_db.productLots)..where((l) => l.id.equals(lot.id))).write(
+          ProductLotsCompanion(
+            quantityRemaining: Value(lot.quantityRemaining - takeFromLot),
+          ),
+        );
+
+        await _db.into(_db.stockMovements).insert(
+              StockMovementsCompanion.insert(
+                productId: productId,
+                warehouseId: warehouseId,
+                type: 'OUT',
+                quantity: takeFromLot,
+                lotId: Value(lot.id),
+                refType: 'ADJUSTMENT',
+                refId: lot.id,
+                note: Value(note.isEmpty ? 'Retiro de inventario' : note),
+              ),
+            );
+
+        remainingToConsume -= takeFromLot;
+      }
+
+      await (_db.update(_db.stock)..where((s) => s.id.equals(stock!.id))).write(
+        StockCompanion(quantity: Value(stock!.quantity - quantity)),
+      );
     });
   }
 }

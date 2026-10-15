@@ -187,11 +187,73 @@ class EmployeeCommission {
     this.employeeName,
     this.amount, {
     this.isActive = true,
+    this.totalSales = 0,
   });
   final int employeeId;
   final String employeeName;
   final int amount;
   final bool isActive;
+
+  /// Cuánto ha vendido en total (no la comisión, el dinero de las ventas).
+  final int totalSales;
+}
+
+/// Fecha del último pago de comisión por vendedor (si ha tenido alguno).
+Future<Map<int, DateTime>> _lastCommissionPaymentByEmployee(AppDatabase db) async {
+  final rows = await (db.select(db.cashMovements)
+        ..where((c) => c.type.equals('COMMISSION_PAYMENT') & c.refType.equals('EMPLOYEE')))
+      .get();
+  final lastByEmployee = <int, DateTime>{};
+  for (final r in rows) {
+    final current = lastByEmployee[r.refId];
+    if (current == null || r.date.isAfter(current)) {
+      lastByEmployee[r.refId] = r.date;
+    }
+  }
+  return lastByEmployee;
+}
+
+/// Suma de ventas por vendedor: ventas confirmadas directas (que ya
+/// incluyen las que salieron de facturar un apartado) más los abonos de
+/// apartados que todavía no se han facturado — sin duplicar: un apartado
+/// ya facturado deja de contarse por sus abonos porque su valor completo
+/// ya quedó en la Venta que generó.
+///
+/// Si se pasa [sinceByEmployee] (la fecha del último pago de comisión de
+/// cada vendedor), solo cuenta lo vendido DESPUÉS de esa fecha — así el
+/// contador vuelve a cero apenas se le paga, para llevar mejor control de
+/// lo nuevo desde el último pago.
+Future<Map<int, int>> _salesTotalByEmployee(
+  AppDatabase db, {
+  Map<int, DateTime>? sinceByEmployee,
+}) async {
+  final totals = <int, int>{};
+
+  final saleRows = await (db.select(db.sales)
+        ..where((s) => s.state.equals('CONFIRMED') & s.employeeId.isNotNull()))
+      .get();
+  for (final s in saleRows) {
+    if (s.employeeId == null) continue;
+    final since = sinceByEmployee?[s.employeeId!];
+    if (since != null && !s.date.isAfter(since)) continue;
+    totals[s.employeeId!] = (totals[s.employeeId!] ?? 0) + s.total;
+  }
+
+  final paymentQuery = db.select(db.payments).join([
+    innerJoin(db.layaways, db.layaways.id.equalsExp(db.payments.layawayId)),
+  ])
+    ..where(db.payments.layawayId.isNotNull() & db.layaways.state.equals('IN_PROCESS'));
+  final paymentRows = await paymentQuery.get();
+  for (final row in paymentRows) {
+    final payment = row.readTable(db.payments);
+    final layaway = row.readTable(db.layaways);
+    if (layaway.employeeId == null) continue;
+    final since = sinceByEmployee?[layaway.employeeId!];
+    if (since != null && !payment.date.isAfter(since)) continue;
+    totals[layaway.employeeId!] = (totals[layaway.employeeId!] ?? 0) + payment.totalAmount;
+  }
+
+  return totals;
 }
 
 Future<Map<int, int>> _earnedCommissionsByEmployee(
@@ -277,6 +339,8 @@ final allTimeCommissionsByEmployeeProvider =
 
   Future<List<EmployeeCommission>> load() async {
     final earned = await _earnedCommissionsByEmployee(db);
+    final lastPaymentByEmployee = await _lastCommissionPaymentByEmployee(db);
+    final salesTotals = await _salesTotalByEmployee(db, sinceByEmployee: lastPaymentByEmployee);
 
     final paidRows = await (db.select(db.cashMovements)
           ..where((c) => c.type.equals('COMMISSION_PAYMENT') & c.refType.equals('EMPLOYEE')))
@@ -286,7 +350,7 @@ final allTimeCommissionsByEmployeeProvider =
       paidByEmployee[row.refId] = (paidByEmployee[row.refId] ?? 0) + (-row.amount);
     }
 
-    final employeeIds = {...earned.keys, ...paidByEmployee.keys};
+    final employeeIds = {...earned.keys, ...paidByEmployee.keys, ...salesTotals.keys};
     if (employeeIds.isEmpty) return [];
 
     final employees = await db.select(db.employees).get();
@@ -300,6 +364,7 @@ final allTimeCommissionsByEmployeeProvider =
           nameById[id] ?? 'Desconocido',
           (earned[id] ?? 0) - (paidByEmployee[id] ?? 0),
           isActive: activeById[id] ?? true,
+          totalSales: salesTotals[id] ?? 0,
         ),
     ]..sort((a, b) => b.amount.compareTo(a.amount));
     return list;

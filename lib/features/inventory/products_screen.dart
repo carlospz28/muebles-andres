@@ -104,12 +104,14 @@ class ProductsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final productsAsync = ref.watch(productsStreamProvider);
     final categoriesAsync = ref.watch(categoriesStreamProvider);
+    final costByProduct = ref.watch(productFifoCostProvider).value ?? const {};
     final categoryNames = {
       for (final c in categoriesAsync.value ?? <Category>[]) c.id: c.name,
     };
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'products',
         onPressed: () => _openForm(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo producto'),
@@ -141,11 +143,13 @@ class ProductsScreen extends ConsumerWidget {
                   separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, i) {
                     final p = products[i];
+                    final cost = costByProduct[p.id];
                     return ListTile(
                       leading: CircleAvatar(child: Text(p.sku)),
                       title: Text(p.name),
                       subtitle: Text(
-                        '${categoryNames[p.categoryId] ?? ''} · ${formatCopWithSymbol(p.price)}',
+                        '${categoryNames[p.categoryId] ?? ''} · '
+                        '${cost == null ? 'Sin costo aún' : 'Costo: ${formatCopWithSymbol(cost)}'}',
                       ),
                       onTap: () => _openForm(context, ref, product: p),
                       trailing: Switch(

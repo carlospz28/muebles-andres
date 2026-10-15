@@ -91,6 +91,7 @@ class SalesScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Ventas')),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'sales',
         onPressed: () => _startNewSale(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nueva venta'),

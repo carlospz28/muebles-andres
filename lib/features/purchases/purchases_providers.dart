@@ -11,7 +11,10 @@ class SupplierBalance {
   final Supplier supplier;
   final int totalPurchased;
   final int totalPaid;
-  int get balance => totalPurchased - totalPaid;
+
+  /// Incluye la deuda inicial cargada al crear/editar el proveedor (para
+  /// proveedores a los que ya se les debía algo antes de usar la app).
+  int get balance => supplier.openingBalance + totalPurchased - totalPaid;
 }
 
 /// Cuenta por proveedor: cuánto se le ha comprado (confirmado) contra

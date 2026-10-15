@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
+import '../people/people_providers.dart';
 import 'expenses_providers.dart';
 
 class ExpensesListScreen extends ConsumerWidget {
@@ -19,10 +20,15 @@ class ExpensesListScreen extends ConsumerWidget {
       return;
     }
 
+    final accounts = await ref.read(paymentAccountsStreamProvider.future);
+    if (!context.mounted) return;
+
     ExpenseCategory? category = categories.first;
     final descCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
+    var method = 'CASH';
+    PaymentAccount? account = accounts.firstOrNull;
 
     await showDialog(
       context: context,
@@ -56,6 +62,50 @@ class ExpensesListScreen extends ConsumerWidget {
                   decoration: const InputDecoration(labelText: 'Valor', prefixText: '\$ '),
                 ),
                 const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => setState(() => method = 'CASH'),
+                        icon: const Icon(Icons.payments_outlined),
+                        label: const Text('Efectivo'),
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: method == 'CASH'
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : null,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: accounts.isEmpty
+                            ? null
+                            : () => setState(() => method = 'CONSIGNMENT'),
+                        icon: const Icon(Icons.account_balance_outlined),
+                        label: const Text('Consignación'),
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: method == 'CONSIGNMENT'
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : null,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (method == 'CONSIGNMENT') ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<PaymentAccount>(
+                    initialValue: account,
+                    decoration: const InputDecoration(labelText: 'Cuenta'),
+                    items: [
+                      for (final a in accounts)
+                        DropdownMenuItem(value: a, child: Text(a.label)),
+                    ],
+                    onChanged: (v) => setState(() => account = v),
+                  ),
+                ],
+                const SizedBox(height: 12),
                 TextField(
                   controller: noteCtrl,
                   decoration: const InputDecoration(labelText: 'Nota (opcional)'),
@@ -69,7 +119,7 @@ class ExpensesListScreen extends ConsumerWidget {
               child: const Text('Cancelar'),
             ),
             FilledButton(
-              onPressed: category == null
+              onPressed: category == null || (method == 'CONSIGNMENT' && account == null)
                   ? null
                   : () async {
                       final amount = ThousandsInputFormatter.parse(amountCtrl.text);
@@ -79,6 +129,8 @@ class ExpensesListScreen extends ConsumerWidget {
                             description: descCtrl.text.trim(),
                             amount: amount,
                             note: noteCtrl.text.trim(),
+                            method: method,
+                            accountId: method == 'CONSIGNMENT' ? account!.id : null,
                           );
                       if (dialogContext.mounted) Navigator.pop(dialogContext);
                     },
@@ -96,6 +148,7 @@ class ExpensesListScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'expensesList',
         onPressed: () => _addExpense(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo gasto'),
@@ -115,7 +168,10 @@ class ExpensesListScreen extends ConsumerWidget {
               final e = row.expense;
               return ListTile(
                 title: Text(e.description.isEmpty ? row.categoryName : e.description),
-                subtitle: Text(row.categoryName),
+                subtitle: Text(
+                  '${row.categoryName} · '
+                  '${e.method == 'CONSIGNMENT' ? 'Consignación' : 'Efectivo'}',
+                ),
                 trailing: Text(
                   formatCopWithSymbol(e.amount),
                   style: const TextStyle(fontWeight: FontWeight.bold),

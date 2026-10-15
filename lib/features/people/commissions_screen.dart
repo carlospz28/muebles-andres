@@ -125,12 +125,13 @@ class _CommissionsReportTab extends ConsumerWidget {
               ListTile(
                 leading: const Icon(Icons.percent),
                 title: Text(c.employeeName),
-                subtitle: c.isActive
-                    ? null
-                    : const Text(
-                        'Inactivo — ya no se le pueden asignar ventas nuevas',
-                        style: TextStyle(fontSize: 12),
-                      ),
+                subtitle: Text(
+                  [
+                    'Total vendido: ${formatCopWithSymbol(c.totalSales)}',
+                    if (!c.isActive) 'Inactivo — ya no se le pueden asignar ventas nuevas',
+                  ].join(' · '),
+                  style: const TextStyle(fontSize: 12),
+                ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

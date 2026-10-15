@@ -14,6 +14,11 @@ class SuppliersScreen extends ConsumerWidget {
     final nameCtrl = TextEditingController(text: supplier?.name ?? '');
     final docCtrl = TextEditingController(text: supplier?.document ?? '');
     final phoneCtrl = TextEditingController(text: supplier?.phone ?? '');
+    final openingBalanceCtrl = TextEditingController(
+      text: supplier == null || supplier.openingBalance == 0
+          ? ''
+          : formatCop(supplier.openingBalance),
+    );
 
     return showDialog(
       context: context,
@@ -39,6 +44,18 @@ class SuppliersScreen extends ConsumerWidget {
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(labelText: 'Teléfono'),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: openingBalanceCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [ThousandsInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Deuda inicial (opcional)',
+                  helperText: 'Si ya se le debía algo antes de usar la app, '
+                      'ponlo aquí para que empiece a contar desde ahí.',
+                  prefixText: '\$ ',
+                ),
+              ),
             ],
           ),
         ),
@@ -56,6 +73,7 @@ class SuppliersScreen extends ConsumerWidget {
                     name: name,
                     document: docCtrl.text.trim().isEmpty ? null : docCtrl.text.trim(),
                     phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+                    openingBalance: ThousandsInputFormatter.parse(openingBalanceCtrl.text),
                   );
               if (context.mounted) Navigator.pop(context);
             },
@@ -67,17 +85,17 @@ class SuppliersScreen extends ConsumerWidget {
   }
 
   Future<void> _paySupplier(BuildContext context, WidgetRef ref, SupplierBalance b) async {
-    final lines = await showPaymentDialog(
+    final result = await showPaymentDialog(
       context,
       totalToPay: b.balance,
       title: 'Pagar a ${b.supplier.name}',
       allowPartial: true,
     );
-    if (lines == null) return;
+    if (result == null) return;
 
     await ref.read(purchasesRepositoryProvider).paySupplier(
           supplierId: b.supplier.id,
-          paymentLines: lines,
+          paymentLines: result.lines,
         );
   }
 
@@ -87,6 +105,7 @@ class SuppliersScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'suppliers',
         onPressed: () => _openForm(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo proveedor'),
@@ -112,8 +131,10 @@ class SuppliersScreen extends ConsumerWidget {
                   if (b.totalPurchased > 0)
                     'Comprado ${formatCopWithSymbol(b.totalPurchased)} · '
                         'Pagado ${formatCopWithSymbol(b.totalPaid)}',
+                  if (s.openingBalance > 0)
+                    'Deuda inicial ${formatCopWithSymbol(s.openingBalance)}',
                 ].join(' · ')),
-                isThreeLine: b.totalPurchased > 0,
+                isThreeLine: b.totalPurchased > 0 || s.openingBalance > 0,
                 onTap: () => _openForm(context, ref, supplier: s),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,

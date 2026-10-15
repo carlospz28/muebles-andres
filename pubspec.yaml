@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.3.0+4
+version: 1.13.1+15
 
 environment:
   sdk: ^3.12.2
@@ -60,6 +60,16 @@ dependencies:
   # Login básico
   flutter_secure_storage: ^9.2.2
   crypto: ^3.0.5
+
+  # Copia de seguridad: compartir/elegir el archivo de la base de datos
+  share_plus: ^10.1.2
+  file_picker: ^8.1.2
+
+dependency_overrides:
+  # file_picker 8.3.7 arrastra una versión de flutter_plugin_android_lifecycle
+  # que exige compileSdk 36 y rompe el build de release; se fija a una
+  # versión anterior compatible.
+  flutter_plugin_android_lifecycle: 2.0.24
 
 dev_dependencies:
   flutter_test:

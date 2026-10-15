@@ -65,6 +65,7 @@ class KitsScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'kits',
         onPressed: () => _createKit(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo kit'),

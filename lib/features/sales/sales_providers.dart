@@ -63,10 +63,19 @@ final saleItemsProvider =
 });
 
 class PaymentLineInput {
-  const PaymentLineInput({required this.method, required this.amount, this.accountId});
-  final String method; // 'CASH' | 'CONSIGNMENT'
+  const PaymentLineInput({
+    required this.method,
+    required this.amount,
+    this.accountId,
+    this.supplierId,
+  });
+  final String method; // 'CASH' | 'CONSIGNMENT' | 'SUPPLIER'
   final int amount;
   final int? accountId;
+
+  /// Proveedor al que se le mandó la plata directamente, cuando method es
+  /// 'SUPPLIER'.
+  final int? supplierId;
 }
 
 class SalesRepository {
@@ -197,20 +206,17 @@ class SalesRepository {
         );
       }
 
-      // Validar disponibilidad y consumir lotes FIFO por cada ítem.
+      // Consume lotes FIFO por cada ítem. No bloquea por falta de stock:
+      // casi todos los días entra mercancía nueva, así que se puede vender
+      // algo que ya estaba apartado (se repone al día siguiente); el
+      // inventario puede quedar en negativo mientras tanto, señal de que
+      // hay que conseguir más.
       for (final it in items) {
         final stock = await (_db.select(_db.stock)
               ..where((s) =>
                   s.productId.equals(it.productId) &
                   s.warehouseId.equals(sale.warehouseId)))
             .getSingleOrNull();
-
-        final available = (stock?.quantity ?? 0) - (stock?.reservedQuantity ?? 0);
-        if (available < it.quantity) {
-          throw StateError(
-            'Stock insuficiente para el producto (disponible: $available, requerido: ${it.quantity}).',
-          );
-        }
 
         var remainingToConsume = it.quantity;
         var costTotal = 0;
@@ -289,6 +295,7 @@ class SalesRepository {
                 method: line.method,
                 amount: line.amount,
                 accountId: Value(line.accountId),
+                supplierId: Value(line.supplierId),
               ),
             );
 
@@ -302,6 +309,12 @@ class SalesRepository {
                 refId: saleId,
               ),
             );
+
+        await creditSupplierIfDirectPayment(
+          _db,
+          line,
+          detail: 'Pago directo desde venta ${sale.number}',
+        );
       }
     });
   }
@@ -331,6 +344,7 @@ class SalesRepository {
               ..where((c) => c.saleItemId.equals(it.id)))
             .get();
 
+        var consumedQty = 0;
         for (final c in consumptions) {
           final lot = await (_db.select(_db.productLots)..where((l) => l.id.equals(c.lotId)))
               .getSingleOrNull();
@@ -354,6 +368,7 @@ class SalesRepository {
                   note: Value('Devolución venta ${sale.number}'),
                 ),
               );
+          consumedQty += c.quantity;
         }
 
         final stock = await (_db.select(_db.stock)
@@ -362,8 +377,17 @@ class SalesRepository {
                   s.warehouseId.equals(sale.warehouseId)))
             .getSingleOrNull();
         if (stock != null) {
+          // Lo que ya se había descontado físicamente (consumptions) vuelve
+          // al físico; lo que seguía apenas reservado (venta generada por un
+          // apartado que nunca se marcó como entregado) libera la reserva
+          // en vez de sumarse dos veces al físico.
+          final notYetConsumed = it.quantity - consumedQty;
+          final newReserved = stock.reservedQuantity - notYetConsumed;
           await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-            StockCompanion(quantity: Value(stock.quantity + it.quantity)),
+            StockCompanion(
+              quantity: Value(stock.quantity + consumedQty),
+              reservedQuantity: Value(newReserved < 0 ? 0 : newReserved),
+            ),
           );
         }
       }
@@ -396,3 +420,33 @@ class SalesRepository {
 final salesRepositoryProvider = Provider<SalesRepository>((ref) {
   return SalesRepository(ref.watch(databaseProvider));
 });
+
+/// Si la línea de pago fue directo a un proveedor (el cliente le manda la
+/// plata a, por ejemplo, un proveedor para cubrir el pedido, sin que pase
+/// por la caja ni una cuenta propia del negocio), eso también abona la
+/// deuda con ese proveedor — compartido entre Ventas y Apartados porque
+/// ambos permiten esta forma de pago.
+Future<void> creditSupplierIfDirectPayment(
+  AppDatabase db,
+  PaymentLineInput line, {
+  required String detail,
+}) async {
+  if (line.method != 'SUPPLIER' || line.supplierId == null) return;
+  await db.into(db.supplierPayments).insert(
+        SupplierPaymentsCompanion.insert(
+          supplierId: line.supplierId!,
+          amount: line.amount,
+          note: Value(detail),
+        ),
+      );
+  await db.into(db.cashMovements).insert(
+        CashMovementsCompanion.insert(
+          type: 'SUPPLIER_PAYMENT',
+          amount: -line.amount,
+          method: const Value('SUPPLIER'),
+          detail: Value(detail),
+          refType: 'SUPPLIER',
+          refId: line.supplierId!,
+        ),
+      );
+}

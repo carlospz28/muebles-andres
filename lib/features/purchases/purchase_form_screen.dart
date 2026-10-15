@@ -163,7 +163,7 @@ class PurchaseFormScreen extends ConsumerWidget {
         title: 'Pago al proveedor',
       );
       if (result == null) return;
-      lines = result;
+      lines = result.lines;
     }
     if (!context.mounted) return;
 

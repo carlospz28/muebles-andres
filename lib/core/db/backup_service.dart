@@ -1,0 +1,80 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+
+import 'database.dart';
+
+/// Ruta del archivo real de la base de datos — el mismo que usa
+/// AppDatabase internamente (ver database.dart _openConnection).
+Future<String> liveDatabasePath() async {
+  final dbFolder = await getApplicationDocumentsDirectory();
+  return p.join(dbFolder.path, 'muebles_andres.sqlite');
+}
+
+String _timestamp() {
+  final now = DateTime.now();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}';
+}
+
+/// Crea una copia consistente de la base de datos — aunque la app la
+/// tenga abierta en ese momento — usando VACUUM INTO (la forma segura de
+/// SQLite de sacar una foto completa sin dañar nada), y la comparte por
+/// WhatsApp/Drive/correo/lo que el dueño elija. Esto es lo que evita que
+/// se pierda información: se hace un respaldo ANTES de instalar una
+/// actualización, y si algo sale mal al instalar, se restaura desde ahí.
+Future<String> shareBackup(AppDatabase db) async {
+  final tempDir = await getTemporaryDirectory();
+  final backupPath = p.join(tempDir.path, 'MueblesAndres_backup_${_timestamp()}.sqlite');
+
+  final existing = File(backupPath);
+  if (await existing.exists()) await existing.delete();
+
+  await db.customStatement("VACUUM INTO '${backupPath.replaceAll("'", "''")}'");
+
+  await Share.shareXFiles(
+    [XFile(backupPath)],
+    text: 'Copia de seguridad Muebles Andrés',
+    subject: 'Copia de seguridad Muebles Andrés',
+  );
+  return backupPath;
+}
+
+class RestoreResult {
+  const RestoreResult.ok() : error = null;
+  const RestoreResult.error(this.error);
+  final String? error;
+  bool get success => error == null;
+}
+
+/// Deja elegir un archivo .sqlite ya compartido antes y reemplaza la base
+/// de datos actual con él. Cierra la conexión activa antes de copiar
+/// encima — después de esto la app debe cerrarse y volver a abrirse para
+/// que tome el archivo restaurado (por eso no se puede seguir usando la
+/// app normalmente en la misma pantalla tras restaurar).
+Future<RestoreResult> restoreBackup(AppDatabase db) async {
+  final result = await FilePicker.platform.pickFiles(type: FileType.any);
+  final pickedPath = result?.files.single.path;
+  if (pickedPath == null) {
+    return const RestoreResult.error('No se eligió ningún archivo.');
+  }
+
+  final pickedFile = File(pickedPath);
+  final raf = await pickedFile.open();
+  final header = await raf.read(16);
+  await raf.close();
+  final headerText = String.fromCharCodes(header);
+  if (!headerText.startsWith('SQLite format 3')) {
+    return const RestoreResult.error(
+      'Ese archivo no es una copia de seguridad válida (no es un .sqlite).',
+    );
+  }
+
+  final livePath = await liveDatabasePath();
+  await db.close();
+  await pickedFile.copy(livePath);
+  return const RestoreResult.ok();
+}

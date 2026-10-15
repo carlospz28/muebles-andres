@@ -1,5 +1,7 @@
 import 'package:drift/drift.dart';
 
+import 'people_tables.dart';
+
 /// Categorías de gasto, editables por el usuario (arriendo, servicios,
 /// transporte, etc.)
 class ExpenseCategories extends Table {
@@ -15,6 +17,13 @@ class Expenses extends Table {
   TextColumn get description => text().withDefault(const Constant(''))();
   IntColumn get amount => integer()();
   TextColumn get note => text().withDefault(const Constant(''))();
+
+  /// 'CASH' | 'CONSIGNMENT' — con qué se pagó el gasto.
+  TextColumn get method => text().withDefault(const Constant('CASH'))();
+
+  /// Cuenta de consignación de la que salió el pago, si method es
+  /// 'CONSIGNMENT'.
+  IntColumn get accountId => integer().nullable().references(PaymentAccounts, #id)();
 }
 
 /// Libro mayor único de caja: todo ingreso o salida de efectivo queda
@@ -33,9 +42,12 @@ class CashMovements extends Table {
   /// Monto con signo: positivo = ingreso, negativo = salida.
   IntColumn get amount => integer()();
 
-  /// 'CASH' | 'CONSIGNMENT'. Determina si este movimiento afecta el
-  /// efectivo físico de la caja o si fue por transferencia/consignación
-  /// (cuenta como venta, pero no como billete físico en el cajón).
+  /// 'CASH' | 'CONSIGNMENT' | 'SUPPLIER'. Determina si este movimiento
+  /// afecta el efectivo físico de la caja ('CASH'), fue por
+  /// transferencia/consignación ('CONSIGNMENT'), o nunca pasó por la
+  /// caja/cuenta del negocio porque fue plata enviada directo a un
+  /// proveedor ('SUPPLIER') — cuenta como venta pero no como billete
+  /// físico ni como consignación.
   TextColumn get method => text().withDefault(const Constant('CASH'))();
 
   TextColumn get detail => text().withDefault(const Constant(''))();

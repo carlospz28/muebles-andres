@@ -46,6 +46,7 @@ class CategoriesScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'categories',
         onPressed: () => _openForm(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nueva categoría'),

@@ -51,13 +51,15 @@ class AccountBalance {
 
 /// Saldo por cuenta de consignación: lo que han pagado clientes/apartados
 /// por transferencia a esa cuenta, menos lo que se les ha pagado a
-/// proveedores desde/hacia esa misma cuenta.
+/// proveedores desde/hacia esa misma cuenta, menos lo que se ha retirado.
 final accountBalancesProvider = StreamProvider.autoDispose<List<AccountBalance>>((ref) {
   final db = ref.watch(databaseProvider);
   final trigger = StreamGroup.merge<void>([
     db.select(db.paymentAccounts).watch().map((_) {}),
     db.select(db.paymentLines).watch().map((_) {}),
     db.select(db.supplierPayments).watch().map((_) {}),
+    db.select(db.accountWithdrawals).watch().map((_) {}),
+    db.select(db.expenses).watch().map((_) {}),
   ]);
 
   return trigger.asyncMap((_) async {
@@ -80,6 +82,20 @@ final accountBalancesProvider = StreamProvider.autoDispose<List<AccountBalance>>
       final accountId = p.accountId;
       if (accountId == null) continue;
       balances[accountId] = (balances[accountId] ?? 0) - p.amount;
+    }
+
+    final withdrawals = await db.select(db.accountWithdrawals).get();
+    for (final w in withdrawals) {
+      balances[w.accountId] = (balances[w.accountId] ?? 0) - w.amount;
+    }
+
+    final expensesRows = await (db.select(db.expenses)
+          ..where((e) => e.method.equals('CONSIGNMENT')))
+        .get();
+    for (final e in expensesRows) {
+      final accountId = e.accountId;
+      if (accountId == null) continue;
+      balances[accountId] = (balances[accountId] ?? 0) - e.amount;
     }
 
     return [for (final a in accounts) AccountBalance(a, balances[a.id] ?? 0)];
@@ -106,6 +122,8 @@ final accountMovementsProvider =
   final trigger = StreamGroup.merge<void>([
     db.select(db.paymentLines).watch().map((_) {}),
     db.select(db.supplierPayments).watch().map((_) {}),
+    db.select(db.accountWithdrawals).watch().map((_) {}),
+    db.select(db.expenses).watch().map((_) {}),
   ]);
 
   Future<List<AccountMovement>> load() async {
@@ -163,6 +181,32 @@ final accountMovementsProvider =
           date: payment.date,
           amount: -payment.amount,
           description: 'Pago a proveedor · ${supplier.name}',
+        ),
+      );
+    }
+
+    final withdrawals = await (db.select(db.accountWithdrawals)
+          ..where((w) => w.accountId.equals(accountId)))
+        .get();
+    for (final w in withdrawals) {
+      movements.add(
+        AccountMovement(
+          date: w.date,
+          amount: -w.amount,
+          description: 'Retiro${w.note.isEmpty ? '' : ' · ${w.note}'}',
+        ),
+      );
+    }
+
+    final expensesRows = await (db.select(db.expenses)
+          ..where((e) => e.accountId.equals(accountId) & e.method.equals('CONSIGNMENT')))
+        .get();
+    for (final e in expensesRows) {
+      movements.add(
+        AccountMovement(
+          date: e.date,
+          amount: -e.amount,
+          description: 'Gasto${e.description.isEmpty ? '' : ' · ${e.description}'}',
         ),
       );
     }
@@ -308,6 +352,7 @@ class PeopleRepository {
     required String name,
     String? document,
     String? phone,
+    int openingBalance = 0,
   }) async {
     if (id == null) {
       return _db.into(_db.suppliers).insert(
@@ -315,11 +360,17 @@ class PeopleRepository {
               name: name,
               document: Value(document),
               phone: Value(phone),
+              openingBalance: Value(openingBalance),
             ),
           );
     }
     await (_db.update(_db.suppliers)..where((s) => s.id.equals(id))).write(
-      SuppliersCompanion(name: Value(name), document: Value(document), phone: Value(phone)),
+      SuppliersCompanion(
+        name: Value(name),
+        document: Value(document),
+        phone: Value(phone),
+        openingBalance: Value(openingBalance),
+      ),
     );
     return id;
   }
@@ -357,6 +408,37 @@ class PeopleRepository {
   Future<void> setPaymentAccountActive(int id, bool active) async {
     await (_db.update(_db.paymentAccounts)..where((a) => a.id.equals(id)))
         .write(PaymentAccountsCompanion(isActive: Value(active)));
+  }
+
+  /// Retira dinero de una cuenta de consignación (ej. sacarlo del banco
+  /// para tener efectivo en la caja). Descuenta el saldo de la cuenta y
+  /// suma ese efectivo a la caja física, porque ahora sí es billete real
+  /// disponible.
+  Future<void> withdrawFromAccount({
+    required int accountId,
+    required int amount,
+    String note = '',
+  }) async {
+    await _db.transaction(() async {
+      await _db.into(_db.accountWithdrawals).insert(
+            AccountWithdrawalsCompanion.insert(
+              accountId: accountId,
+              amount: amount,
+              note: Value(note),
+            ),
+          );
+
+      await _db.into(_db.cashMovements).insert(
+            CashMovementsCompanion.insert(
+              type: 'ACCOUNT_WITHDRAWAL',
+              amount: amount,
+              method: const Value('CASH'),
+              detail: Value(note.isEmpty ? 'Retiro de cuenta' : note),
+              refType: 'PAYMENT_ACCOUNT',
+              refId: accountId,
+            ),
+          );
+    });
   }
 }
 

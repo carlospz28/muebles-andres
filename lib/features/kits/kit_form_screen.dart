@@ -171,6 +171,7 @@ class KitFormScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Detalle del kit')),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'kitForm',
         onPressed: () => _addComponent(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Agregar componente'),

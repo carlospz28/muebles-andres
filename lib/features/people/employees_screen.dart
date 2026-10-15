@@ -78,6 +78,7 @@ class EmployeesScreen extends ConsumerWidget {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'employees',
         onPressed: () => _openForm(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('Nuevo vendedor'),
