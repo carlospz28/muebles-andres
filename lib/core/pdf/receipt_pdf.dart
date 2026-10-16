@@ -105,7 +105,7 @@ pw.Document _buildReceipt({
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Text(
-              storeName.isEmpty ? 'Muebles Andrés' : storeName,
+              storeName.isEmpty ? 'Muebles Omar' : storeName,
               style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
             ),
             pw.Text(title, style: const pw.TextStyle(fontSize: 14)),

@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.mueblesandres" "\0"
-            VALUE "FileDescription", "muebles_andres" "\0"
+            VALUE "CompanyName", "com.mueblesomar" "\0"
+            VALUE "FileDescription", "Muebles Omar" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "muebles_andres" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.mueblesandres. All rights reserved." "\0"
-            VALUE "OriginalFilename", "muebles_andres.exe" "\0"
-            VALUE "ProductName", "muebles_andres" "\0"
+            VALUE "InternalName", "muebles_omar" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.mueblesomar. All rights reserved." "\0"
+            VALUE "OriginalFilename", "muebles_omar.exe" "\0"
+            VALUE "ProductName", "Muebles Omar" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

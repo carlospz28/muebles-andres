@@ -42,7 +42,7 @@ Future<void> shareAnalysisReportPdf({
       pageFormat: PdfPageFormat.a4,
       build: (context) => [
         pw.Text(
-          storeName.isEmpty ? 'Muebles Andrés' : storeName,
+          storeName.isEmpty ? 'Muebles Omar' : storeName,
           style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
         ),
         pw.Text('Análisis del negocio', style: const pw.TextStyle(fontSize: 14)),

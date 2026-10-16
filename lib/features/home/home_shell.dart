@@ -11,7 +11,6 @@ import '../layaways/layaways_screen.dart';
 import '../people/commissions_screen.dart';
 import '../people/payment_accounts_screen.dart';
 import '../people/suppliers_screen.dart';
-import '../production/production_screen.dart';
 import '../purchases/purchases_screen.dart';
 import '../reports/reports_screen.dart';
 import '../sales/sales_screen.dart';
@@ -53,11 +52,6 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       'Kits',
       Icons.weekend_outlined,
       (_) => const KitsScreen(),
-    ),
-    _Destination(
-      'Producción',
-      Icons.precision_manufacturing_outlined,
-      (_) => const ProductionScreen(),
     ),
     _Destination(
       'Inventario',

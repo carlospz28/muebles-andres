@@ -28,7 +28,7 @@ String _timestamp() {
 /// actualización, y si algo sale mal al instalar, se restaura desde ahí.
 Future<String> shareBackup(AppDatabase db) async {
   final tempDir = await getTemporaryDirectory();
-  final backupPath = p.join(tempDir.path, 'MueblesAndres_backup_${_timestamp()}.sqlite');
+  final backupPath = p.join(tempDir.path, 'MueblesOmar_backup_${_timestamp()}.sqlite');
 
   final existing = File(backupPath);
   if (await existing.exists()) await existing.delete();
@@ -37,8 +37,8 @@ Future<String> shareBackup(AppDatabase db) async {
 
   await Share.shareXFiles(
     [XFile(backupPath)],
-    text: 'Copia de seguridad Muebles Andrés',
-    subject: 'Copia de seguridad Muebles Andrés',
+    text: 'Copia de seguridad Muebles Omar',
+    subject: 'Copia de seguridad Muebles Omar',
   );
   return backupPath;
 }

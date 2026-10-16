@@ -66,7 +66,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const Icon(Icons.chair_alt, size: 64),
                   const SizedBox(height: 12),
                   Text(
-                    'Muebles Andrés',
+                    'Muebles Omar',
                     style: Theme.of(context).textTheme.headlineSmall,
                     textAlign: TextAlign.center,
                   ),

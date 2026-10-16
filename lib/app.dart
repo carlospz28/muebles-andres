@@ -13,7 +13,7 @@ class MueblesAndresApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
-      title: 'Muebles Andrés',
+      title: 'Muebles Omar',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       home: const _AuthGate(),
