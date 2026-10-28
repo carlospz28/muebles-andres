@@ -1,5 +1,7 @@
+import 'package:flutter/material.dart' show DateUtils;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muebles_andres/core/db/database.dart';
 import 'package:muebles_andres/core/providers.dart';
 import 'package:muebles_andres/features/cash/cash_providers.dart';
 import 'package:muebles_andres/features/layaways/layaways_providers.dart';
@@ -80,6 +82,43 @@ void main() {
     addTearDown(container.dispose);
     final list = await container.read(layawaysWithCustomerProvider.future);
     expect([for (final i in list) i.layaway.id], [c, b, a], reason: 'por número, el más nuevo arriba');
+  });
+
+  test('corregir la fecha de un abono que quedó en hoy lo saca de la caja y del flujo de hoy', () async {
+    final supplierId = await shop.db.into(shop.db.suppliers).insert(SuppliersCompanion.insert(name: 'Maderas'));
+    final sofa = await shop.product('Sofá', stock: 1);
+    final id = await shop.layaways.createDraft(
+        customerId: shop.customerId, warehouseId: shop.warehouseId, date: old);
+    await shop.layaways.addItem(layawayId: id, productId: sofa, quantity: 1, unitPrice: 320000);
+    // Como pasó en la tienda: el abono quedó con la fecha de hoy.
+    await shop.layaways.addPayment(layawayId: id, paymentLines: [
+      const PaymentLineInput(method: 'CASH', amount: 50000),
+      PaymentLineInput(method: 'SUPPLIER', amount: 20000, supplierId: supplierId),
+    ]);
+    // Otro abono, de otro día, que no se debe mover.
+    await shop.layaways.addPayment(
+      layawayId: id,
+      paymentLines: [const PaymentLineInput(method: 'CASH', amount: 10000)],
+      date: DateTime(2025, 1, 5, 12),
+    );
+    // La caja se contó después de esas fechas viejas y antes de hoy.
+    await CashRepository(shop.db).setOpeningCash(date: DateTime(2026, 6, 1), amount: 0);
+    expect((await loadCashAvailable(shop.db)).amount, 50000, reason: 'el abono de "hoy" infla la caja');
+
+    final todayPayment = (await (shop.db.select(shop.db.payments)
+              ..where((p) => p.totalAmount.equals(70000)))
+            .get())
+        .single;
+    await shop.layaways.setPaymentDate(todayPayment.id, old);
+
+    expect((await loadCashAvailable(shop.db)).amount, 0, reason: 'ya no está en la caja de hoy');
+    final moves = await shop.db.select(shop.db.cashMovements).get();
+    final today = DateTime.now();
+    expect(moves.where((m) => DateUtils.isSameDay(m.date, today)), isEmpty,
+        reason: 'ni el abono ni su pago directo a proveedor quedan en hoy');
+    expect(moves.where((m) => m.date == DateTime(2025, 1, 5, 12)).length, 1, reason: 'el otro abono no se movió');
+    final direct = (await shop.db.select(shop.db.supplierPayments).get()).single;
+    expect(direct.date, old);
   });
 
   test('el abono no puede tener fecha futura', () async {

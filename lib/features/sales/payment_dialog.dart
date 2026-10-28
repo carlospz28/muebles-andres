@@ -37,6 +37,7 @@ Future<PaymentResult?> showPaymentDialog(
   bool showDeliveredOption = false,
   bool showSupplierOption = false,
   bool showDateOption = false,
+  DateTime? initialDate,
 }) {
   return showDialog<PaymentResult>(
     context: context,
@@ -47,6 +48,7 @@ Future<PaymentResult?> showPaymentDialog(
       showDeliveredOption: showDeliveredOption,
       showSupplierOption: showSupplierOption,
       showDateOption: showDateOption,
+      initialDate: initialDate,
     ),
   );
 }
@@ -59,6 +61,7 @@ class _PaymentDialog extends ConsumerStatefulWidget {
     required this.showDeliveredOption,
     required this.showSupplierOption,
     required this.showDateOption,
+    this.initialDate,
   });
   final int totalToPay;
   final String title;
@@ -67,6 +70,9 @@ class _PaymentDialog extends ConsumerStatefulWidget {
   final bool showSupplierOption;
   final bool showDateOption;
 
+  /// Fecha que aparece al abrir (por defecto hoy).
+  final DateTime? initialDate;
+
   @override
   ConsumerState<_PaymentDialog> createState() => _PaymentDialogState();
 }
@@ -74,7 +80,7 @@ class _PaymentDialog extends ConsumerStatefulWidget {
 class _PaymentDialogState extends ConsumerState<_PaymentDialog> {
   final List<_DraftLine> _lines = [];
   bool _delivered = false;
-  DateTime _date = DateTime.now();
+  late DateTime _date = widget.initialDate ?? DateTime.now();
 
   int get _paid => _lines.fold(0, (sum, l) => sum + l.amount);
   int get _remaining => widget.totalToPay - _paid;

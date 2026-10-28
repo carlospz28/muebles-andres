@@ -170,6 +170,42 @@ class LayawaysRepository {
     });
   }
 
+  /// Corrige la fecha de un abono ya registrado (ej. un abono de un
+  /// apartado viejo que quedó con la fecha de hoy). Mueve también sus
+  /// filas del libro de caja y su pago directo a proveedor, si lo tuvo:
+  /// todos se guardaron con la misma hora exacta que el abono. Solo
+  /// mientras el apartado está en proceso.
+  Future<void> setPaymentDate(int paymentId, DateTime date) async {
+    if (date.isAfter(DateTime.now())) {
+      throw StateError('La fecha del abono no puede ser futura.');
+    }
+    await _db.transaction(() async {
+      final payment = await (_db.select(_db.payments)..where((p) => p.id.equals(paymentId))).getSingle();
+      final layawayId = payment.layawayId;
+      if (layawayId == null || payment.totalAmount <= 0) {
+        throw StateError('Solo se puede cambiar la fecha de un abono de apartado.');
+      }
+      await _requireInProcess(layawayId);
+      final old = payment.date;
+
+      await (_db.update(_db.payments)..where((p) => p.id.equals(paymentId)))
+          .write(PaymentsCompanion(date: Value(date)));
+      await (_db.update(_db.cashMovements)
+            ..where((m) =>
+                m.type.equals('LAYAWAY_PAYMENT') &
+                m.refType.equals('LAYAWAY') &
+                m.refId.equals(layawayId) &
+                m.date.equals(old)))
+          .write(CashMovementsCompanion(date: Value(date)));
+      final directNote = 'Pago directo desde abono apartado #$layawayId';
+      await (_db.update(_db.supplierPayments)..where((p) => p.note.equals(directNote) & p.date.equals(old)))
+          .write(SupplierPaymentsCompanion(date: Value(date)));
+      await (_db.update(_db.cashMovements)
+            ..where((m) => m.type.equals('SUPPLIER_PAYMENT') & m.detail.equals(directNote) & m.date.equals(old)))
+          .write(CashMovementsCompanion(date: Value(date)));
+    });
+  }
+
   /// Agrega un producto al apartado. A diferencia de una venta directa, un
   /// apartado es una promesa de entrega futura: que no haya suficiente
   /// stock hoy no significa que no se vaya a conseguir antes de entregar,
