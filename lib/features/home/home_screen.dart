@@ -10,7 +10,8 @@ import '../../core/widgets/month_navigator.dart';
 import '../cash/cash_providers.dart';
 import '../inventory/catalog_providers.dart';
 import '../people/people_providers.dart';
-import '../reports/reports_providers.dart' show ReportPeriod, periodRange;
+import '../reports/reports_providers.dart'
+    show ProfitSummary, ReportPeriod, loadProfit, periodRange, profitTrigger;
 
 /// Periodo de la tarjeta "Ventas del periodo" en Inicio, independiente del
 /// que se usa en Análisis o Auditoría.
@@ -32,7 +33,7 @@ final homeTotalsProvider = StreamProvider.autoDispose<_HomeTotalsSnapshot>((ref)
   final period = ref.watch(homePeriodProvider);
   final selectedMonth = ref.watch(homeSelectedMonthProvider);
   final trigger = StreamGroup.merge<void>([
-    db.select(db.cashMovements).watch().map((_) {}),
+    profitTrigger(db),
     db.select(db.layaways).watch().map((_) {}),
     db.select(db.cashSessions).watch().map((_) {}),
   ]);
@@ -177,13 +178,22 @@ class _HomeBody extends ConsumerWidget {
                 icon: Icons.calendar_month,
               ),
               _KpiCard(
-                label: 'Ganancia de $periodLabel',
-                value: formatCopWithSymbol(data?.netProfitPeriod ?? 0),
+                label: 'Utilidad de $periodLabel',
+                value: formatCopWithSymbol(data?.profit.netProfit ?? 0),
                 icon: Icons.trending_up,
-                subtitle: 'Entradas menos gastos, compras y comisiones',
-                valueColor: (data?.netProfitPeriod ?? 0) < 0
+                subtitle: 'Ventas netas − costo − gastos − comisiones',
+                valueColor: (data?.profit.netProfit ?? 0) < 0
                     ? Theme.of(context).colorScheme.error
                     : Colors.green,
+              ),
+              _KpiCard(
+                label: 'Flujo neto de $periodLabel',
+                value: formatCopWithSymbol(data?.netProfitPeriod ?? 0),
+                icon: Icons.swap_vert,
+                subtitle: 'Entradas menos todas las salidas de plata (incluye compras de mercancía)',
+                valueColor: (data?.netProfitPeriod ?? 0) < 0
+                    ? Theme.of(context).colorScheme.error
+                    : null,
               ),
               _KpiCard(
                 label: 'Caja disponible hoy',
@@ -220,6 +230,7 @@ class _HomeTotalsSnapshot {
     required this.salesToday,
     required this.salesPeriod,
     required this.netProfitPeriod,
+    required this.profit,
     required this.cashToday,
     required this.openingCash,
     required this.activeLayaways,
@@ -227,10 +238,13 @@ class _HomeTotalsSnapshot {
   final int salesToday;
   final int salesPeriod;
 
-  /// Entradas menos salidas del periodo (ventas y abonos, menos gastos,
-  /// compras a proveedores, comisiones y devoluciones) — lo que realmente
-  /// queda libre, no solo lo vendido.
+  /// Flujo neto del periodo: entradas menos salidas de plata (ventas y
+  /// abonos, menos gastos, compras a proveedores, comisiones y
+  /// devoluciones). NO es la utilidad: comprar mercancía lo baja.
   final int netProfitPeriod;
+
+  /// Utilidad del periodo, con la misma regla de Análisis y Finanzas.
+  final ProfitSummary profit;
   final int cashToday;
   final int openingCash;
   final int activeLayaways;
@@ -275,7 +289,7 @@ Future<_HomeTotalsSnapshot> _loadTotals(
   final salesToday = await sumSince(startOfDay, type: 'SALE');
   final salesPeriod = await sumSince(periodStart, type: 'SALE', until: periodEnd);
 
-  // Ganancia neta = todo lo que entró menos todo lo que salió (ventas,
+  // Flujo neto = todo lo que entró menos todo lo que salió (ventas,
   // abonos, gastos, compras a proveedores, comisiones, devoluciones).
   // Se excluye el retiro de una cuenta de consignación porque no es plata
   // nueva — es la misma plata del negocio pasando del banco a la caja, no
@@ -287,18 +301,10 @@ Future<_HomeTotalsSnapshot> _loadTotals(
   );
 
   // La base de caja NO se reinicia cada día: se usa la última que se haya
-  // guardado (sin importar qué día fue) como punto de partida, y se le
-  // suma todo el efectivo movido desde esa fecha en adelante. Así el
-  // dueño la registra una sola vez y el sistema lleva la cuenta solo;
-  // "Editar" es para corregirla si hace un conteo físico, no algo que
-  // haya que repetir todos los días.
-  final session = await (db.select(db.cashSessions)
-        ..orderBy([(s) => OrderingTerm.desc(s.date)])
-        ..limit(1))
-      .getSingleOrNull();
-  final openingCash = session?.openingCash ?? 0;
-  final cashBaseDate = session?.date ?? DateTime.fromMillisecondsSinceEpoch(0);
-  final cashMovedSinceBase = await sumSince(cashBaseDate, method: 'CASH');
+  // guardado como punto de partida y se le suma el efectivo movido desde
+  // ese momento (ver loadCashAvailable). "Editar" es para corregirla con
+  // un conteo físico, no algo que haya que repetir todos los días.
+  final cash = await loadCashAvailable(db);
 
   final layawayRow = await (db.selectOnly(db.layaways)
         ..addColumns([db.layaways.id.count()])
@@ -310,8 +316,9 @@ Future<_HomeTotalsSnapshot> _loadTotals(
     salesToday: salesToday,
     salesPeriod: salesPeriod,
     netProfitPeriod: netProfitPeriod,
-    cashToday: openingCash + cashMovedSinceBase,
-    openingCash: openingCash,
+    profit: await loadProfit(db, periodStart, periodEnd),
+    cashToday: cash.amount,
+    openingCash: cash.openingCash,
     activeLayaways: activeLayaways,
   );
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/widgets/errors.dart';
 import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../purchases/purchases_providers.dart';
@@ -86,13 +87,16 @@ class AccountMovementsScreen extends ConsumerWidget {
         ),
       ),
     );
-    if (confirmed != true) return;
+    if (confirmed != true || !context.mounted) return;
 
-    await ref.read(peopleRepositoryProvider).withdrawFromAccount(
-          accountId: account.id,
-          amount: ThousandsInputFormatter.parse(amountCtrl.text),
-          note: noteCtrl.text.trim(),
-        );
+    await runOrShowError(
+      context,
+      () => ref.read(peopleRepositoryProvider).withdrawFromAccount(
+            accountId: account.id,
+            amount: ThousandsInputFormatter.parse(amountCtrl.text),
+            note: noteCtrl.text.trim(),
+          ),
+    );
   }
 
   Future<void> _payToSupplier(BuildContext context, WidgetRef ref) async {
@@ -202,17 +206,20 @@ class AccountMovementsScreen extends ConsumerWidget {
         },
       ),
     );
-    if (confirmed != true || selected == null) return;
+    if (confirmed != true || selected == null || !context.mounted) return;
 
-    await ref.read(purchasesRepositoryProvider).paySupplier(
-      supplierId: selected!.id,
-      paymentLines: [
-        PaymentLineInput(
-          method: 'CONSIGNMENT',
-          amount: ThousandsInputFormatter.parse(amountCtrl.text),
-          accountId: account.id,
-        ),
-      ],
+    await runOrShowError(
+      context,
+      () => ref.read(purchasesRepositoryProvider).paySupplier(
+        supplierId: selected!.id,
+        paymentLines: [
+          PaymentLineInput(
+            method: 'CONSIGNMENT',
+            amount: ThousandsInputFormatter.parse(amountCtrl.text),
+            accountId: account.id,
+          ),
+        ],
+      ),
     );
   }
 

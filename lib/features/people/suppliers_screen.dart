@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/widgets/errors.dart';
 import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../purchases/purchases_providers.dart';
@@ -91,12 +92,15 @@ class SuppliersScreen extends ConsumerWidget {
       title: 'Pagar a ${b.supplier.name}',
       allowPartial: true,
     );
-    if (result == null) return;
+    if (result == null || !context.mounted) return;
 
-    await ref.read(purchasesRepositoryProvider).paySupplier(
-          supplierId: b.supplier.id,
-          paymentLines: result.lines,
-        );
+    await runOrShowError(
+      context,
+      () => ref.read(purchasesRepositoryProvider).paySupplier(
+            supplierId: b.supplier.id,
+            paymentLines: result.lines,
+          ),
+    );
   }
 
   @override

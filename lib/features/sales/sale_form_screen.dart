@@ -5,10 +5,12 @@ import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../../core/pdf/receipt_pdf.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/errors.dart';
 import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import 'payment_dialog.dart';
 import 'sales_providers.dart';
+import 'uncosted_warning.dart';
 
 class SaleFormScreen extends ConsumerWidget {
   const SaleFormScreen({super.key, required this.saleId});
@@ -126,14 +128,17 @@ class SaleFormScreen extends ConsumerWidget {
                     final price = ThousandsInputFormatter.parse(priceCtrl.text);
                     final discount = ThousandsInputFormatter.parse(discountCtrl.text);
                     if (qty <= 0 || price <= 0) return;
-                    await ref.read(salesRepositoryProvider).addItem(
-                          saleId: saleId,
-                          productId: selected!.id,
-                          quantity: qty,
-                          unitPrice: price,
-                          discount: discount,
-                        );
-                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                    final ok = await runOrShowError(
+                      dialogContext,
+                      () => ref.read(salesRepositoryProvider).addItem(
+                            saleId: saleId,
+                            productId: selected!.id,
+                            quantity: qty,
+                            unitPrice: price,
+                            discount: discount,
+                          ),
+                    );
+                    if (ok && dialogContext.mounted) Navigator.pop(dialogContext);
                   },
                   child: const Text('Agregar'),
                 ),
@@ -171,24 +176,23 @@ class SaleFormScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (rate == null) return;
-    await ref.read(salesRepositoryProvider).setCommissionRate(saleId, rate);
+    if (rate == null || !context.mounted) return;
+    await runOrShowError(context, () => ref.read(salesRepositoryProvider).setCommissionRate(saleId, rate));
   }
 
   Future<void> _addKit(BuildContext context, WidgetRef ref) async {
     final picked = await showKitPickerDialog(context, ref);
     if (picked == null) return;
 
-    for (final item in picked.items) {
-      await ref.read(salesRepositoryProvider).addItem(
+    if (!context.mounted) return;
+    await runOrShowError(
+      context,
+      () => ref.read(salesRepositoryProvider).addKitLines(
             saleId: saleId,
-            productId: item.productId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            discount: item.discount,
             kitId: picked.kitId,
-          );
-    }
+            lines: [for (final i in picked.items) i.toKitLine()],
+          ),
+    );
   }
 
   Future<void> _confirmSale(BuildContext context, WidgetRef ref, Sale sale) async {
@@ -202,13 +206,14 @@ class SaleFormScreen extends ConsumerWidget {
     if (result == null) return;
 
     try {
-      await ref.read(salesRepositoryProvider).confirmSale(
+      final warnings = await ref.read(salesRepositoryProvider).confirmSale(
             saleId: saleId,
             paymentLines: result.lines,
           );
       if (result.delivered) {
         await ref.read(salesRepositoryProvider).setDelivered(saleId, true);
       }
+      if (context.mounted) await showUncostedWarning(context, warnings);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));

@@ -59,6 +59,7 @@ class LayawaysScreen extends ConsumerWidget {
       case 'INVOICED':
         return Colors.blue;
       case 'CANCELLED_NO_INVOICE':
+      case 'RETURNED':
         return Theme.of(context).colorScheme.error;
       default:
         return Colors.orange;
@@ -71,6 +72,8 @@ class LayawaysScreen extends ConsumerWidget {
         return 'Facturado';
       case 'CANCELLED_NO_INVOICE':
         return 'Cancelado';
+      case 'RETURNED':
+        return 'Devuelto';
       default:
         return 'En proceso';
     }
@@ -135,8 +138,8 @@ class LayawaysScreen extends ConsumerWidget {
                           subtitle: Text(
                             totals == null
                                 ? '...'
-                                : 'Total ${formatCopWithSymbol(totals.total)} · '
-                                    'Saldo ${formatCopWithSymbol(totals.balance)}'
+                                : 'Total ${formatCopWithSymbol(totals.total)}'
+                                    '${l.state == 'IN_PROCESS' || l.state == 'INVOICED' ? ' · Saldo ${formatCopWithSymbol(totals.balance)}' : ''}'
                                     '${l.state == 'IN_PROCESS' ? (l.delivered ? ' · Entregado' : ' · Sin entregar') : ''}',
                           ),
                           trailing: Chip(

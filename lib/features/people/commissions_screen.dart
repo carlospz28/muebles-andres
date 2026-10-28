@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/widgets/errors.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../reports/reports_providers.dart';
 import 'employees_screen.dart';
@@ -82,12 +83,16 @@ class _CommissionsReportTab extends ConsumerWidget {
     final amount = ThousandsInputFormatter.parse(amountCtrl.text);
     if (amount <= 0) return;
 
-    await ref.read(peopleRepositoryProvider).payCommission(
-          employeeId: c.employeeId,
-          amount: amount,
-        );
+    if (!context.mounted) return;
+    final ok = await runOrShowError(
+      context,
+      () => ref.read(peopleRepositoryProvider).payCommission(
+            employeeId: c.employeeId,
+            amount: amount,
+          ),
+    );
 
-    if (context.mounted) {
+    if (ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(

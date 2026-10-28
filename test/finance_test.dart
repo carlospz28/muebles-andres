@@ -39,14 +39,16 @@ void main() {
     await db.close();
   });
 
-  test('"Ajustar caja" de Inicio también se puede guardar dos veces el mismo día', () async {
+  test('"Ajustar caja" de Inicio (hora real) y Finanzas ven la misma caja', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     final repo = CashRepository(db);
     await repo.setOpeningCash(date: DateTime(2026, 10, 20, 9), amount: 100000);
     await repo.setOpeningCash(date: DateTime(2026, 10, 20, 15), amount: 120000);
-    final rows = await db.select(db.cashSessions).get();
-    expect(rows.length, 1);
-    expect(rows.single.openingCash, 120000);
+    // Cada ajuste queda con su hora; manda el último.
+    expect((await db.select(db.cashSessions).get()).length, 2);
+    final now = DateTime(2026, 10, 20, 18);
+    expect(await cashAt(db, now), 120000);
+    expect((await loadCashAvailable(db)).amount, 120000);
     await db.close();
   });
 

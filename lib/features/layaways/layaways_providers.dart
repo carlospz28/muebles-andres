@@ -4,7 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
-import '../sales/sales_providers.dart' show PaymentLineInput, creditSupplierIfDirectPayment;
+import '../../core/widgets/errors.dart';
+import '../sales/sales_providers.dart'
+    show
+        KitLine,
+        PaymentLineInput,
+        UncostedUnits,
+        checkKitLines,
+        consumeItemFifo,
+        creditSupplierIfDirectPayment,
+        refundPaymentLines;
 
 final layawaysStreamProvider = StreamProvider.autoDispose<List<Layaway>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -155,65 +164,98 @@ class LayawaysRepository {
     int discount = 0,
     int? kitId,
   }) async {
+    final line = KitLine(productId: productId, quantity: quantity, unitPrice: unitPrice, discount: discount);
+    checkLine(quantity: quantity, unitPrice: unitPrice, discount: discount);
+    return _db.transaction(() async {
+      final layaway = await _requireInProcess(layawayId);
+      return _insertItem(layaway, kitId, line);
+    });
+  }
+
+  /// Agrega todas las líneas de un kit en una sola transacción (si una
+  /// falla, no queda ninguna ni su reserva). Devuelve cuántas unidades
+  /// faltan por conseguir. El kit debe quedar con precio final > 0.
+  Future<int> addKitLines({required int layawayId, required int kitId, required List<KitLine> lines}) async {
+    checkKitLines(lines);
+    return _db.transaction(() async {
+      final layaway = await _requireInProcess(layawayId);
+      var shortage = 0;
+      for (final l in lines) {
+        shortage += await _insertItem(layaway, kitId, l);
+      }
+      return shortage;
+    });
+  }
+
+  /// Solo un apartado en proceso se puede modificar.
+  Future<Layaway> _requireInProcess(int layawayId) async {
     final layaway =
         await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
+    if (layaway.state != 'IN_PROCESS') {
+      throw StateError('El apartado #$layawayId ya no está en proceso: no se puede modificar.');
+    }
+    return layaway;
+  }
 
+  /// Inserta la línea y reserva su mercancía (sin abrir transacción).
+  Future<int> _insertItem(Layaway layaway, int? kitId, KitLine l) async {
+    checkLine(quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount);
     final stock = await (_db.select(_db.stock)
           ..where((s) =>
-              s.productId.equals(productId) & s.warehouseId.equals(layaway.warehouseId)))
+              s.productId.equals(l.productId) & s.warehouseId.equals(layaway.warehouseId)))
         .getSingleOrNull();
     final available = (stock?.quantity ?? 0) - (stock?.reservedQuantity ?? 0);
-    final shortage = quantity - available > 0 ? quantity - available : 0;
+    final shortage = l.quantity - available > 0 ? l.quantity - available : 0;
 
     await _db.into(_db.layawayItems).insert(
           LayawayItemsCompanion.insert(
-            layawayId: layawayId,
-            productId: productId,
+            layawayId: layaway.id,
+            productId: l.productId,
             kitId: Value(kitId),
-            quantity: quantity,
-            unitPrice: unitPrice,
-            discount: Value(discount),
-            lineTotal: Value(quantity * unitPrice - discount),
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discount: Value(l.discount),
+            lineTotal: Value(l.total),
           ),
         );
 
     if (stock == null) {
       await _db.into(_db.stock).insert(
             StockCompanion.insert(
-              productId: productId,
+              productId: l.productId,
               warehouseId: layaway.warehouseId,
-              reservedQuantity: Value(quantity),
+              reservedQuantity: Value(l.quantity),
             ),
           );
     } else {
       await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-        StockCompanion(reservedQuantity: Value(stock.reservedQuantity + quantity)),
+        StockCompanion(reservedQuantity: Value(stock.reservedQuantity + l.quantity)),
       );
     }
-
     return shortage;
   }
 
+  /// Quita la línea y libera su reserva, todo o nada.
   Future<void> removeItem(int itemId) async {
-    final item =
-        await (_db.select(_db.layawayItems)..where((i) => i.id.equals(itemId))).getSingle();
-    final layaway = await (_db.select(_db.layaways)
-          ..where((l) => l.id.equals(item.layawayId)))
-        .getSingle();
+    return _db.transaction(() async {
+      final item =
+          await (_db.select(_db.layawayItems)..where((i) => i.id.equals(itemId))).getSingle();
+      final layaway = await _requireInProcess(item.layawayId);
 
-    final stock = await (_db.select(_db.stock)
-          ..where((s) =>
-              s.productId.equals(item.productId) &
-              s.warehouseId.equals(layaway.warehouseId)))
-        .getSingleOrNull();
-    if (stock != null) {
-      final newReserved = stock.reservedQuantity - item.quantity;
-      await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-        StockCompanion(reservedQuantity: Value(newReserved < 0 ? 0 : newReserved)),
-      );
-    }
+      final stock = await (_db.select(_db.stock)
+            ..where((s) =>
+                s.productId.equals(item.productId) &
+                s.warehouseId.equals(layaway.warehouseId)))
+          .getSingleOrNull();
+      if (stock != null) {
+        final newReserved = stock.reservedQuantity - item.quantity;
+        await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
+          StockCompanion(reservedQuantity: Value(newReserved < 0 ? 0 : newReserved)),
+        );
+      }
 
-    await (_db.delete(_db.layawayItems)..where((i) => i.id.equals(itemId))).go();
+      await (_db.delete(_db.layawayItems)..where((i) => i.id.equals(itemId))).go();
+    });
   }
 
   /// Registra un abono. La comisión de un apartado se calcula sobre cada
@@ -223,7 +265,9 @@ class LayawaysRepository {
     required List<PaymentLineInput> paymentLines,
     double commissionRate = 0,
   }) async {
+    checkRate(commissionRate);
     await _db.transaction(() async {
+      await _requireInProcess(layawayId);
       final total = paymentLines.fold<int>(0, (sum, l) => sum + l.amount);
       final commissionAmount = (total * commissionRate / 100).round();
 
@@ -323,15 +367,19 @@ class LayawaysRepository {
             ),
           );
 
-      await _db.into(_db.cashMovements).insert(
-            CashMovementsCompanion.insert(
-              type: 'LAYAWAY_REFUND',
-              amount: -paid,
-              detail: Value('Devolución apartado #$layawayId: $reason'),
-              refType: 'LAYAWAY_RETURN',
-              refId: layawayId,
-            ),
-          );
+      // Se devuelve por las mismas formas de pago de cada abono.
+      final payments =
+          await (_db.select(_db.payments)..where((p) => p.layawayId.equals(layawayId))).get();
+      await refundPaymentLines(
+        _db,
+        payments: payments,
+        layawayId: layawayId,
+        fallbackAmount: paid,
+        type: 'LAYAWAY_REFUND',
+        refType: 'LAYAWAY_RETURN',
+        refId: layawayId,
+        detail: 'Devolución apartado #$layawayId: $reason',
+      );
 
       await (_db.update(_db.layaways)..where((l) => l.id.equals(layawayId)))
           .write(const LayawaysCompanion(state: Value('CANCELLED_NO_INVOICE')));
@@ -445,13 +493,35 @@ class LayawaysRepository {
   /// facturar) se consumen físicamente los lotes FIFO, se descuenta el
   /// stock real y se libera la reserva — porque hasta que el cliente no se
   /// lleva el mueble, sigue siendo un compromiso, no una salida física.
-  Future<void> setDelivered(int layawayId, bool delivered) async {
+  /// Devuelve los avisos de unidades entregadas sin inventario registrado.
+  Future<List<UncostedUnits>> setDelivered(int layawayId, bool delivered) async {
+    final warnings = <UncostedUnits>[];
     await _db.transaction(() async {
       final layaway =
           await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
 
+      if (layaway.state == 'RETURNED') {
+        throw StateError('La venta de este apartado fue devuelta: ya no se puede entregar.');
+      }
+      if (layaway.saleId != null) {
+        final sale = await (_db.select(_db.sales)..where((s) => s.id.equals(layaway.saleId!)))
+            .getSingleOrNull();
+        if (sale != null && sale.isReturn) {
+          throw StateError('La venta de este apartado fue devuelta: ya no se puede entregar.');
+        }
+      }
+
+      // Idempotente: si ya hay salidas de inventario de este apartado (se
+      // entregó antes), nunca se vuelve a descontar, aunque el indicador
+      // "entregado" se haya desmarcado y vuelto a marcar.
+      final alreadyFulfilled = await (_db.select(_db.stockMovements)
+            ..where((m) => m.refType.equals('LAYAWAY') & m.refId.equals(layawayId))
+            ..limit(1))
+          .getSingleOrNull();
+
       final shouldFulfill = delivered &&
           !layaway.delivered &&
+          alreadyFulfilled == null &&
           layaway.state == 'INVOICED' &&
           layaway.saleId != null;
 
@@ -461,69 +531,16 @@ class LayawaysRepository {
             await (_db.select(_db.saleItems)..where((i) => i.saleId.equals(saleId))).get();
 
         for (final it in items) {
-          var remainingToConsume = it.quantity;
-          final lots = await (_db.select(_db.productLots)
-                ..where((l) =>
-                    l.productId.equals(it.productId) &
-                    l.warehouseId.equals(layaway.warehouseId) &
-                    l.quantityRemaining.isBiggerThanValue(0))
-                ..orderBy([(l) => OrderingTerm.asc(l.receivedAt)]))
-              .get();
-
-          var costTotal = 0;
-          for (final lot in lots) {
-            if (remainingToConsume <= 0) break;
-            final takeFromLot = remainingToConsume < lot.quantityRemaining
-                ? remainingToConsume
-                : lot.quantityRemaining;
-            if (takeFromLot <= 0) continue;
-
-            await (_db.update(_db.productLots)..where((l) => l.id.equals(lot.id))).write(
-              ProductLotsCompanion(
-                quantityRemaining: Value(lot.quantityRemaining - takeFromLot),
-              ),
-            );
-            await _db.into(_db.saleItemLotConsumptions).insert(
-                  SaleItemLotConsumptionsCompanion.insert(
-                    saleItemId: it.id,
-                    lotId: lot.id,
-                    quantity: takeFromLot,
-                    unitCost: lot.unitCost,
-                  ),
-                );
-            await _db.into(_db.stockMovements).insert(
-                  StockMovementsCompanion.insert(
-                    productId: it.productId,
-                    warehouseId: layaway.warehouseId,
-                    type: 'OUT',
-                    quantity: takeFromLot,
-                    lotId: Value(lot.id),
-                    refType: 'LAYAWAY',
-                    refId: layawayId,
-                    note: Value('Entrega apartado #$layawayId'),
-                  ),
-                );
-            costTotal += takeFromLot * lot.unitCost;
-            remainingToConsume -= takeFromLot;
-          }
-
-          await (_db.update(_db.saleItems)..where((i) => i.id.equals(it.id)))
-              .write(SaleItemsCompanion(costTotal: Value(costTotal)));
-
-          final stock = await (_db.select(_db.stock)
-                ..where((s) =>
-                    s.productId.equals(it.productId) &
-                    s.warehouseId.equals(layaway.warehouseId)))
-              .getSingleOrNull();
-          if (stock != null) {
-            final newReserved = stock.reservedQuantity - it.quantity;
-            await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-              StockCompanion(
-                quantity: Value(stock.quantity - it.quantity),
-                reservedQuantity: Value(newReserved < 0 ? 0 : newReserved),
-              ),
-            );
-          }
+          final w = await consumeItemFifo(
+            _db,
+            item: it,
+            warehouseId: layaway.warehouseId,
+            refType: 'LAYAWAY',
+            refId: layawayId,
+            note: 'Entrega apartado #$layawayId',
+            releaseReservation: true,
+          );
+          if (w != null) warnings.add(w);
         }
       }
 
@@ -534,6 +551,7 @@ class LayawaysRepository {
         ),
       );
     });
+    return warnings;
   }
 }
 

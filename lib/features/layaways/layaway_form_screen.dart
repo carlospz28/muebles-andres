@@ -5,9 +5,11 @@ import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../../core/pdf/receipt_pdf.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/errors.dart';
 import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import '../sales/payment_dialog.dart';
+import '../sales/uncosted_warning.dart';
 import 'layaways_providers.dart';
 
 class LayawayFormScreen extends ConsumerWidget {
@@ -133,10 +135,7 @@ class LayawayFormScreen extends ConsumerWidget {
                         );
                       }
                     } catch (e) {
-                      if (dialogContext.mounted) {
-                        ScaffoldMessenger.of(dialogContext)
-                            .showSnackBar(SnackBar(content: Text('$e')));
-                      }
+                      if (dialogContext.mounted) showErrorSnack(dialogContext, e);
                     }
                   },
                   child: const Text('Agregar'),
@@ -153,21 +152,15 @@ class LayawayFormScreen extends ConsumerWidget {
     if (picked == null) return;
 
     var totalShortage = 0;
-    for (final item in picked.items) {
-      try {
-        totalShortage += await ref.read(layawaysRepositoryProvider).addItem(
-              layawayId: layawayId,
-              productId: item.productId,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              discount: item.discount,
-              kitId: picked.kitId,
-            );
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-        }
-      }
+    try {
+      totalShortage = await ref.read(layawaysRepositoryProvider).addKitLines(
+            layawayId: layawayId,
+            kitId: picked.kitId,
+            lines: [for (final i in picked.items) i.toKitLine()],
+          );
+    } catch (e) {
+      if (context.mounted) showErrorSnack(context, e);
+      return;
     }
     if (totalShortage > 0 && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -234,11 +227,15 @@ class LayawayFormScreen extends ConsumerWidget {
       ),
     );
 
-    await ref.read(layawaysRepositoryProvider).addPayment(
-          layawayId: layawayId,
-          paymentLines: result.lines,
-          commissionRate: rate ?? 0,
-        );
+    if (!context.mounted) return;
+    await runOrShowError(
+      context,
+      () => ref.read(layawaysRepositoryProvider).addPayment(
+            layawayId: layawayId,
+            paymentLines: result.lines,
+            commissionRate: rate ?? 0,
+          ),
+    );
   }
 
   Future<void> _invoice(BuildContext context, WidgetRef ref) async {
@@ -434,14 +431,20 @@ class LayawayFormScreen extends ConsumerWidget {
               const Divider(height: 32),
               if (totals != null) ...[
                 _TotalsRow(label: 'Total', value: totals.total),
-                _TotalsRow(label: 'Pagado', value: totals.paid),
-                _TotalsRow(label: 'Saldo', value: totals.balance, bold: true),
+                if (layaway.state == 'IN_PROCESS' || layaway.state == 'INVOICED') ...[
+                  _TotalsRow(label: 'Pagado', value: totals.paid),
+                  _TotalsRow(label: 'Saldo', value: totals.balance, bold: true),
+                ] else
+                  // Devuelto o cancelado: lo abonado ya se le devolvió.
+                  _TotalsRow(label: 'Pagado (neto, tras la devolución)', value: totals.paid),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Entregado al cliente'),
                   subtitle: Text(
-                    layaway.state != 'INVOICED'
+                    layaway.state == 'RETURNED'
+                        ? 'La venta de este apartado se devolvió: no se entrega.'
+                        : layaway.state != 'INVOICED'
                         ? 'Se activa cuando el apartado ya esté facturado (saldo en \$0).'
                         : layaway.delivered
                             ? 'Inventario ya descontado.'
@@ -450,7 +453,11 @@ class LayawayFormScreen extends ConsumerWidget {
                   ),
                   value: layaway.delivered,
                   onChanged: (layaway.state == 'INVOICED' && !layaway.delivered)
-                      ? (v) => ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v)
+                      ? (v) async {
+                          final warnings =
+                              await ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v);
+                          if (context.mounted) await showUncostedWarning(context, warnings);
+                        }
                       : null,
                 ),
                 const SizedBox(height: 16),
@@ -462,11 +469,15 @@ class LayawayFormScreen extends ConsumerWidget {
                     children: [
                       for (final p in payments)
                         ListTile(
-                          leading: const Icon(Icons.payments_outlined),
-                          title: Text(formatCopWithSymbol(p.totalAmount)),
+                          leading: Icon(p.totalAmount < 0 ? Icons.undo : Icons.payments_outlined),
+                          title: Text(p.totalAmount < 0
+                              ? 'Devolución · ${formatCopWithSymbol(-p.totalAmount)}'
+                              : formatCopWithSymbol(p.totalAmount)),
                           subtitle: Text(
-                            'Comisión ${p.commissionRate.toStringAsFixed(1)}%: '
-                            '${formatCopWithSymbol(p.commissionAmount)}',
+                            p.totalAmount < 0
+                                ? 'Se devolvió por las mismas formas de pago'
+                                : 'Comisión ${p.commissionRate.toStringAsFixed(1)}%: '
+                                    '${formatCopWithSymbol(p.commissionAmount)}',
                           ),
                           trailing: Text(
                             '${p.date.day}/${p.date.month}/${p.date.year}',
