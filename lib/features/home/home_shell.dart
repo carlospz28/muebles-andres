@@ -5,6 +5,7 @@ import '../../core/providers.dart';
 import '../audit/audit_screen.dart';
 import '../auth/login_screen.dart';
 import '../expenses/expenses_screen.dart';
+import '../finance/finance_screen.dart';
 import '../inventory/inventory_screen.dart';
 import '../kits/kits_screen.dart';
 import '../layaways/layaways_screen.dart';
@@ -87,6 +88,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       'Análisis',
       Icons.bar_chart_outlined,
       (_) => const ReportsScreen(),
+    ),
+    _Destination(
+      'Finanzas',
+      Icons.account_balance_wallet_outlined,
+      (_) => const FinanceScreen(),
     ),
     _Destination(
       'Auditoría',
