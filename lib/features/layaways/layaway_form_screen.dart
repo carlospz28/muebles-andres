@@ -8,6 +8,7 @@ import '../../core/providers.dart';
 import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import '../sales/payment_dialog.dart';
+import '../sales/uncosted_warning.dart';
 import 'layaways_providers.dart';
 
 class LayawayFormScreen extends ConsumerWidget {
@@ -456,7 +457,11 @@ class LayawayFormScreen extends ConsumerWidget {
                   ),
                   value: layaway.delivered,
                   onChanged: (layaway.state == 'INVOICED' && !layaway.delivered)
-                      ? (v) => ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v)
+                      ? (v) async {
+                          final warnings =
+                              await ref.read(layawaysRepositoryProvider).setDelivered(layawayId, v);
+                          if (context.mounted) await showUncostedWarning(context, warnings);
+                        }
                       : null,
                 ),
                 const SizedBox(height: 16),

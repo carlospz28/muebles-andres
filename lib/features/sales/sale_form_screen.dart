@@ -9,6 +9,7 @@ import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import 'payment_dialog.dart';
 import 'sales_providers.dart';
+import 'uncosted_warning.dart';
 
 class SaleFormScreen extends ConsumerWidget {
   const SaleFormScreen({super.key, required this.saleId});
@@ -202,13 +203,14 @@ class SaleFormScreen extends ConsumerWidget {
     if (result == null) return;
 
     try {
-      await ref.read(salesRepositoryProvider).confirmSale(
+      final warnings = await ref.read(salesRepositoryProvider).confirmSale(
             saleId: saleId,
             paymentLines: result.lines,
           );
       if (result.delivered) {
         await ref.read(salesRepositoryProvider).setDelivered(saleId, true);
       }
+      if (context.mounted) await showUncostedWarning(context, warnings);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));

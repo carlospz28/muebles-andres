@@ -176,14 +176,16 @@ class SalesRepository {
     );
   }
 
-  /// Confirma la venta: valida stock, consume los lotes FIFO más antiguos
-  /// primero (para que el costo real de la venta sea el del lote que
-  /// corresponde), descuenta stock físico, registra el pago (posiblemente
-  /// mixto: parte efectivo + parte consignación) y abona la caja.
-  Future<void> confirmSale({
+  /// Confirma la venta: consume los lotes FIFO más antiguos primero (para
+  /// que el costo real de la venta sea el del lote que corresponde),
+  /// descuenta stock físico, registra el pago (posiblemente mixto: parte
+  /// efectivo + parte consignación) y abona la caja. Devuelve los avisos de
+  /// unidades vendidas sin inventario registrado (vacío si todo alcanzó).
+  Future<List<UncostedUnits>> confirmSale({
     required int saleId,
     required List<PaymentLineInput> paymentLines,
   }) async {
+    final warnings = <UncostedUnits>[];
     await _db.transaction(() async {
       await _recalcTotals(saleId);
       final sale =
@@ -210,72 +212,18 @@ class SalesRepository {
       // casi todos los días entra mercancía nueva, así que se puede vender
       // algo que ya estaba apartado (se repone al día siguiente); el
       // inventario puede quedar en negativo mientras tanto, señal de que
-      // hay que conseguir más.
+      // hay que conseguir más (y se avisa en pantalla).
       for (final it in items) {
-        final stock = await (_db.select(_db.stock)
-              ..where((s) =>
-                  s.productId.equals(it.productId) &
-                  s.warehouseId.equals(sale.warehouseId)))
-            .getSingleOrNull();
-
-        var remainingToConsume = it.quantity;
-        var costTotal = 0;
-
-        final lots = await (_db.select(_db.productLots)
-              ..where((l) =>
-                  l.productId.equals(it.productId) &
-                  l.warehouseId.equals(sale.warehouseId) &
-                  l.quantityRemaining.isBiggerThanValue(0))
-              ..orderBy([(l) => OrderingTerm.asc(l.receivedAt)]))
-            .get();
-
-        for (final lot in lots) {
-          if (remainingToConsume <= 0) break;
-          final takeFromLot = remainingToConsume < lot.quantityRemaining
-              ? remainingToConsume
-              : lot.quantityRemaining;
-          if (takeFromLot <= 0) continue;
-
-          await (_db.update(_db.productLots)..where((l) => l.id.equals(lot.id))).write(
-            ProductLotsCompanion(
-              quantityRemaining: Value(lot.quantityRemaining - takeFromLot),
-            ),
-          );
-
-          await _db.into(_db.saleItemLotConsumptions).insert(
-                SaleItemLotConsumptionsCompanion.insert(
-                  saleItemId: it.id,
-                  lotId: lot.id,
-                  quantity: takeFromLot,
-                  unitCost: lot.unitCost,
-                ),
-              );
-
-          await _db.into(_db.stockMovements).insert(
-                StockMovementsCompanion.insert(
-                  productId: it.productId,
-                  warehouseId: sale.warehouseId,
-                  type: 'OUT',
-                  quantity: takeFromLot,
-                  lotId: Value(lot.id),
-                  refType: 'SALE',
-                  refId: saleId,
-                  note: Value('Venta ${sale.number}'),
-                ),
-              );
-
-          costTotal += takeFromLot * lot.unitCost;
-          remainingToConsume -= takeFromLot;
-        }
-
-        await (_db.update(_db.saleItems)..where((i) => i.id.equals(it.id)))
-            .write(SaleItemsCompanion(costTotal: Value(costTotal)));
-
-        if (stock != null) {
-          await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-            StockCompanion(quantity: Value(stock.quantity - it.quantity)),
-          );
-        }
+        final w = await consumeItemFifo(
+          _db,
+          item: it,
+          warehouseId: sale.warehouseId,
+          refType: 'SALE',
+          refId: saleId,
+          note: 'Venta ${sale.number}',
+          releaseReservation: false,
+        );
+        if (w != null) warnings.add(w);
       }
 
       await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
@@ -317,6 +265,7 @@ class SalesRepository {
         );
       }
     });
+    return warnings;
   }
 
   /// Devolución de venta: revierte exactamente los lotes de donde salió
@@ -339,12 +288,19 @@ class SalesRepository {
       final items =
           await (_db.select(_db.saleItems)..where((i) => i.saleId.equals(saleId))).get();
 
+      // ¿La mercancía salió físicamente? Sí, salvo que la venta venga de un
+      // apartado que todavía no se había entregado (seguía solo reservada).
+      final sourceLayaway = await (_db.select(_db.layaways)..where((l) => l.saleId.equals(saleId)))
+          .getSingleOrNull();
+      final wentOut = sourceLayaway == null || sourceLayaway.delivered;
+
       for (final it in items) {
         final consumptions = await (_db.select(_db.saleItemLotConsumptions)
               ..where((c) => c.saleItemId.equals(it.id)))
             .get();
 
         var consumedQty = 0;
+        var consumedCost = 0;
         for (final c in consumptions) {
           final lot = await (_db.select(_db.productLots)..where((l) => l.id.equals(c.lotId)))
               .getSingleOrNull();
@@ -369,6 +325,35 @@ class SalesRepository {
                 ),
               );
           consumedQty += c.quantity;
+          consumedCost += c.quantity * c.unitCost;
+        }
+
+        // Unidades que se vendieron sin lote (#4): si salieron, vuelven
+        // como un lote nuevo con el mismo costo con que se costearon.
+        final withoutLot = it.quantity - consumedQty;
+        if (wentOut && withoutLot > 0) {
+          final unitCost = ((it.costTotal - consumedCost) / withoutLot).round();
+          final lotId = await _db.into(_db.productLots).insert(
+                ProductLotsCompanion.insert(
+                  productId: it.productId,
+                  warehouseId: sale.warehouseId,
+                  quantityReceived: withoutLot,
+                  quantityRemaining: withoutLot,
+                  unitCost: unitCost < 0 ? 0 : unitCost,
+                ),
+              );
+          await _db.into(_db.stockMovements).insert(
+                StockMovementsCompanion.insert(
+                  productId: it.productId,
+                  warehouseId: sale.warehouseId,
+                  type: 'IN',
+                  quantity: withoutLot,
+                  lotId: Value(lotId),
+                  refType: 'SALE_RETURN',
+                  refId: saleId,
+                  note: Value('Devolución venta ${sale.number} (unidades vendidas sin lote)'),
+                ),
+              );
         }
 
         final stock = await (_db.select(_db.stock)
@@ -377,17 +362,14 @@ class SalesRepository {
                   s.warehouseId.equals(sale.warehouseId)))
             .getSingleOrNull();
         if (stock != null) {
-          // Lo que ya se había descontado físicamente (consumptions) vuelve
-          // al físico; lo que seguía apenas reservado (venta generada por un
-          // apartado que nunca se marcó como entregado) libera la reserva
+          // Si la mercancía salió, todo vuelve al físico. Si seguía apenas
+          // reservada (apartado facturado sin entregar), se libera la reserva
           // en vez de sumarse dos veces al físico.
-          final notYetConsumed = it.quantity - consumedQty;
-          final newReserved = stock.reservedQuantity - notYetConsumed;
+          final newReserved = stock.reservedQuantity - it.quantity;
           await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id))).write(
-            StockCompanion(
-              quantity: Value(stock.quantity + consumedQty),
-              reservedQuantity: Value(newReserved < 0 ? 0 : newReserved),
-            ),
+            wentOut
+                ? StockCompanion(quantity: Value(stock.quantity + it.quantity))
+                : StockCompanion(reservedQuantity: Value(newReserved < 0 ? 0 : newReserved)),
           );
         }
       }
@@ -404,8 +386,7 @@ class SalesRepository {
       // La plata se devuelve por las mismas formas de pago con que entró:
       // los abonos del apartado si la venta salió de uno, o los pagos de la
       // venta directa.
-      final fromLayaway = await (_db.select(_db.layaways)..where((l) => l.saleId.equals(saleId)))
-          .getSingleOrNull();
+      final fromLayaway = sourceLayaway;
       final originalPayments = await (_db.select(_db.payments)
             ..where((p) => fromLayaway != null
                 ? p.layawayId.equals(fromLayaway.id)
@@ -438,6 +419,133 @@ class SalesRepository {
 final salesRepositoryProvider = Provider<SalesRepository>((ref) {
   return SalesRepository(ref.watch(databaseProvider));
 });
+
+/// Unidades que salieron sin lote de inventario que las respaldara.
+class UncostedUnits {
+  const UncostedUnits({required this.productName, required this.units, required this.unitCost});
+  final String productName;
+  final int units;
+
+  /// Último costo conocido con el que se costearon, o null si el producto
+  /// nunca ha tenido un ingreso de inventario (quedan a costo 0).
+  final int? unitCost;
+
+  String get message => unitCost == null
+      ? '$productName: $units unidad(es) sin inventario y sin costo conocido — '
+          'quedaron a costo \$0 (la utilidad se verá más alta). Registra su ingreso.'
+      : '$productName: $units unidad(es) sin inventario registrado — se costearon '
+          'con el último costo conocido (\$$unitCost c/u). Registra la compra o el ingreso.';
+}
+
+/// Saca del inventario las unidades de [item] (dentro de una transacción):
+/// consume los lotes FIFO del más antiguo al más nuevo, deja su rastro
+/// (consumos y movimientos) y guarda en el ítem su costo real. Las unidades
+/// que no alcancen a cubrirse con lotes se costean con el último costo
+/// conocido del producto y se devuelven como aviso. Descuenta la
+/// existencia física (creando la fila de Stock si no existía, aunque quede
+/// en negativo) y, si [releaseReservation], también la reserva.
+Future<UncostedUnits?> consumeItemFifo(
+  AppDatabase db, {
+  required SaleItem item,
+  required int warehouseId,
+  required String refType,
+  required int refId,
+  required String note,
+  required bool releaseReservation,
+}) async {
+  var remaining = item.quantity;
+  var costTotal = 0;
+
+  final lots = await (db.select(db.productLots)
+        ..where((l) =>
+            l.productId.equals(item.productId) &
+            l.warehouseId.equals(warehouseId) &
+            l.quantityRemaining.isBiggerThanValue(0))
+        ..orderBy([(l) => OrderingTerm.asc(l.receivedAt), (l) => OrderingTerm.asc(l.id)]))
+      .get();
+
+  for (final lot in lots) {
+    if (remaining <= 0) break;
+    final take = remaining < lot.quantityRemaining ? remaining : lot.quantityRemaining;
+    await (db.update(db.productLots)..where((l) => l.id.equals(lot.id)))
+        .write(ProductLotsCompanion(quantityRemaining: Value(lot.quantityRemaining - take)));
+    await db.into(db.saleItemLotConsumptions).insert(
+          SaleItemLotConsumptionsCompanion.insert(
+            saleItemId: item.id,
+            lotId: lot.id,
+            quantity: take,
+            unitCost: lot.unitCost,
+          ),
+        );
+    await db.into(db.stockMovements).insert(
+          StockMovementsCompanion.insert(
+            productId: item.productId,
+            warehouseId: warehouseId,
+            type: 'OUT',
+            quantity: take,
+            lotId: Value(lot.id),
+            refType: refType,
+            refId: refId,
+            note: Value(note),
+          ),
+        );
+    costTotal += take * lot.unitCost;
+    remaining -= take;
+  }
+
+  UncostedUnits? warning;
+  if (remaining > 0) {
+    // Sin lotes suficientes: último costo conocido (el lote más reciente
+    // que haya tenido el producto, aunque ya esté agotado).
+    final lastLot = await (db.select(db.productLots)
+          ..where((l) => l.productId.equals(item.productId))
+          ..orderBy([(l) => OrderingTerm.desc(l.receivedAt), (l) => OrderingTerm.desc(l.id)])
+          ..limit(1))
+        .getSingleOrNull();
+    costTotal += remaining * (lastLot?.unitCost ?? 0);
+    await db.into(db.stockMovements).insert(
+          StockMovementsCompanion.insert(
+            productId: item.productId,
+            warehouseId: warehouseId,
+            type: 'OUT',
+            quantity: remaining,
+            refType: refType,
+            refId: refId,
+            note: Value('$note (sin lote: costo ${lastLot == null ? 'desconocido' : 'último conocido'})'),
+          ),
+        );
+    final product =
+        await (db.select(db.products)..where((p) => p.id.equals(item.productId))).getSingle();
+    warning = UncostedUnits(productName: product.name, units: remaining, unitCost: lastLot?.unitCost);
+  }
+
+  await (db.update(db.saleItems)..where((i) => i.id.equals(item.id)))
+      .write(SaleItemsCompanion(costTotal: Value(costTotal)));
+
+  final stock = await (db.select(db.stock)
+        ..where((s) => s.productId.equals(item.productId) & s.warehouseId.equals(warehouseId)))
+      .getSingleOrNull();
+  if (stock == null) {
+    await db.into(db.stock).insert(
+          StockCompanion.insert(
+            productId: item.productId,
+            warehouseId: warehouseId,
+            quantity: Value(-item.quantity),
+          ),
+        );
+  } else {
+    final newReserved = stock.reservedQuantity - item.quantity;
+    await (db.update(db.stock)..where((s) => s.id.equals(stock.id))).write(
+      StockCompanion(
+        quantity: Value(stock.quantity - item.quantity),
+        reservedQuantity: releaseReservation
+            ? Value(newReserved < 0 ? 0 : newReserved)
+            : const Value.absent(),
+      ),
+    );
+  }
+  return warning;
+}
 
 /// Devuelve la plata de [payments] por las MISMAS formas de pago con que
 /// entró, línea por línea (debe llamarse dentro de una transacción):
