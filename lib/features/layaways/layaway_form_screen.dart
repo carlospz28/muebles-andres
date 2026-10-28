@@ -179,7 +179,12 @@ class LayawayFormScreen extends ConsumerWidget {
     WidgetRef ref,
     int balance,
     int? employeeId,
+    DateTime layawayDate,
   ) async {
+    // Un apartado viejo que se está subiendo: el abono propone la fecha del
+    // apartado (no hoy), para que no caiga en la caja ni el flujo de hoy.
+    final today = DateTime.now();
+    final isOld = layawayDate.isBefore(DateTime(today.year, today.month, today.day));
     final result = await showPaymentDialog(
       context,
       totalToPay: balance,
@@ -187,6 +192,7 @@ class LayawayFormScreen extends ConsumerWidget {
       allowPartial: true,
       showSupplierOption: true,
       showDateOption: true,
+      initialDate: isOld ? layawayDate : null,
     );
     if (result == null) return;
     if (!context.mounted) return;
@@ -547,9 +553,36 @@ class LayawayFormScreen extends ConsumerWidget {
                                 : 'Comisión ${p.commissionRate.toStringAsFixed(1)}%: '
                                     '${formatCopWithSymbol(p.commissionAmount)}',
                           ),
-                          trailing: Text(
-                            '${p.date.day}/${p.date.month}/${p.date.year}',
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('${p.date.day}/${p.date.month}/${p.date.year}'),
+                              if (inProcess && p.totalAmount > 0) ...[
+                                const SizedBox(width: 4),
+                                const Icon(Icons.edit_calendar_outlined, size: 18),
+                              ],
+                            ],
                           ),
+                          onTap: !(inProcess && p.totalAmount > 0)
+                              ? null
+                              : () async {
+                                  final now = DateTime.now();
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: p.date.isAfter(now) ? now : p.date,
+                                    firstDate: DateTime(2015),
+                                    lastDate: now,
+                                    helpText: 'Fecha en que se recibió este abono',
+                                  );
+                                  if (picked == null || !context.mounted) return;
+                                  final date = DateUtils.isSameDay(picked, now)
+                                      ? now
+                                      : DateTime(picked.year, picked.month, picked.day, 12);
+                                  await runOrShowError(
+                                    context,
+                                    () => ref.read(layawaysRepositoryProvider).setPaymentDate(p.id, date),
+                                  );
+                                },
                         ),
                     ],
                   ),
@@ -565,7 +598,7 @@ class LayawayFormScreen extends ConsumerWidget {
                   if (totals.balance > 0)
                     FilledButton.icon(
                       onPressed: () =>
-                          _addPayment(context, ref, totals.balance, layaway.employeeId),
+                          _addPayment(context, ref, totals.balance, layaway.employeeId, layaway.date),
                       icon: const Icon(Icons.add_card),
                       label: const Text('Registrar abono'),
                     )
