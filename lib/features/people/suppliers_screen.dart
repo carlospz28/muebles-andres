@@ -144,7 +144,11 @@ class SuppliersScreen extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      b.balance > 0 ? 'Debe ${formatCopWithSymbol(b.balance)}' : 'Al día',
+                      b.balance > 0
+                          ? 'Debe ${formatCopWithSymbol(b.balance)}'
+                          : b.balance < 0
+                              ? 'A favor ${formatCopWithSymbol(-b.balance)}'
+                              : 'Al día',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         color: b.balance > 0

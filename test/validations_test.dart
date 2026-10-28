@@ -87,17 +87,26 @@ void main() {
       await expectLater(people.payCommission(employeeId: employee, amount: 1), throwsStateError);
     });
 
-    test('abono a proveedor ≤ lo que se le debe', () async {
+    test('abono a proveedor por encima de la deuda: se rechaza salvo que se confirme como anticipo', () async {
       final supplier = await shop.db.into(shop.db.suppliers).insert(
           SuppliersCompanion.insert(name: 'Maderas', openingBalance: const Value(300000)));
       final purchases = PurchasesRepository(shop.db);
+      const over = [PaymentLineInput(method: 'CASH', amount: 350000)];
 
+      // Sin confirmar: se rechaza y no se guarda nada.
       await expectLater(
-        purchases.paySupplier(supplierId: supplier, paymentLines: [const PaymentLineInput(method: 'CASH', amount: 300001)]),
-        throwsStateError,
+        purchases.paySupplier(supplierId: supplier, paymentLines: over),
+        throwsA(isA<SupplierOverpayment>()
+            .having((e) => e.debt, 'deuda', 300000)
+            .having((e) => e.advance, 'anticipo', 50000)),
       );
-      await purchases.paySupplier(supplierId: supplier, paymentLines: [const PaymentLineInput(method: 'CASH', amount: 300000)]);
-      expect(await supplierDebt(shop.db, supplier), 0);
+      expect(await supplierDebt(shop.db, supplier), 300000);
+      expect(await shop.ledger(), 0);
+
+      // Confirmado como anticipo: queda saldo a favor y sale de caja.
+      await purchases.paySupplier(supplierId: supplier, paymentLines: over, allowAdvance: true);
+      expect(await supplierDebt(shop.db, supplier), -50000);
+      expect(await shop.ledger(method: 'CASH'), -350000);
     });
   });
 }

@@ -208,19 +208,43 @@ class AccountMovementsScreen extends ConsumerWidget {
     );
     if (confirmed != true || selected == null || !context.mounted) return;
 
-    await runOrShowError(
-      context,
-      () => ref.read(purchasesRepositoryProvider).paySupplier(
-        supplierId: selected!.id,
-        paymentLines: [
-          PaymentLineInput(
-            method: 'CONSIGNMENT',
-            amount: ThousandsInputFormatter.parse(amountCtrl.text),
-            accountId: account.id,
-          ),
-        ],
+    final lines = [
+      PaymentLineInput(
+        method: 'CONSIGNMENT',
+        amount: ThousandsInputFormatter.parse(amountCtrl.text),
+        accountId: account.id,
       ),
-    );
+    ];
+    final repo = ref.read(purchasesRepositoryProvider);
+    try {
+      await repo.paySupplier(supplierId: selected!.id, paymentLines: lines);
+    } on SupplierOverpayment catch (e) {
+      // Más de lo que se le debe: se permite como anticipo, pero solo si
+      // el dueño lo confirma.
+      if (!context.mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('¿Registrar un anticipo?'),
+          content: Text(
+            'A ${selected!.name} se le deben ${formatCopWithSymbol(e.debt)} y vas a enviar '
+            '${formatCopWithSymbol(e.total)}. Los ${formatCopWithSymbol(e.advance)} de más '
+            'quedan como saldo a favor del negocio con este proveedor.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Sí, registrar')),
+          ],
+        ),
+      );
+      if (ok != true || !context.mounted) return;
+      await runOrShowError(
+        context,
+        () => repo.paySupplier(supplierId: selected!.id, paymentLines: lines, allowAdvance: true),
+      );
+    } catch (e) {
+      if (context.mounted) showErrorSnack(context, e);
+    }
   }
 
   @override

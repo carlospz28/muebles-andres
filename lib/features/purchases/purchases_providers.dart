@@ -91,6 +91,18 @@ Future<int> supplierDebt(AppDatabase db, int supplierId) async {
       standalone.fold<int>(0, (a, p) => a + p.amount);
 }
 
+/// El abono a un proveedor pasa de lo que se le debe: hay que confirmarlo
+/// como anticipo.
+class SupplierOverpayment implements Exception {
+  const SupplierOverpayment({required this.debt, required this.total});
+  final int debt;
+  final int total;
+  int get advance => total - (debt > 0 ? debt : 0);
+
+  @override
+  String toString() => 'El abono (\$$total) pasa de lo que se le debe al proveedor (\$$debt).';
+}
+
 class PurchaseListItem {
   PurchaseListItem(this.purchase, this.supplierName);
   final Purchase purchase;
@@ -313,9 +325,14 @@ class PurchasesRepository {
 
   /// Abono a proveedor no ligado a una compra puntual (ej. "le pagué
   /// $200.000 a cuenta de lo que le debo en general").
+  ///
+  /// Si el abono pasa de lo que se le debe, lanza [SupplierOverpayment] a
+  /// menos que [allowAdvance] sea true (el dueño confirmó que lo de más es
+  /// un anticipo: la deuda queda en negativo, saldo a favor del negocio).
   Future<void> paySupplier({
     required int supplierId,
     required List<PaymentLineInput> paymentLines,
+    bool allowAdvance = false,
   }) async {
     if (paymentLines.isEmpty || paymentLines.any((l) => l.amount <= 0)) {
       throw StateError('Cada pago debe ser mayor que cero.');
@@ -323,8 +340,8 @@ class PurchasesRepository {
     await _db.transaction(() async {
       final debt = await supplierDebt(_db, supplierId);
       final total = paymentLines.fold<int>(0, (a, l) => a + l.amount);
-      if (total > debt) {
-        throw StateError('No se puede abonar más de lo que se le debe al proveedor (\$$debt).');
+      if (total > debt && !allowAdvance) {
+        throw SupplierOverpayment(debt: debt, total: total);
       }
       for (final line in paymentLines) {
         await _db.into(_db.supplierPayments).insert(
