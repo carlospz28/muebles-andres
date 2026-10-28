@@ -186,6 +186,7 @@ class LayawayFormScreen extends ConsumerWidget {
       title: 'Registrar abono',
       allowPartial: true,
       showSupplierOption: true,
+      showDateOption: true,
     );
     if (result == null) return;
     if (!context.mounted) return;
@@ -234,6 +235,7 @@ class LayawayFormScreen extends ConsumerWidget {
             layawayId: layawayId,
             paymentLines: result.lines,
             commissionRate: rate ?? 0,
+            date: result.date,
           ),
     );
   }
@@ -378,6 +380,36 @@ class LayawayFormScreen extends ConsumerWidget {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event_outlined),
+                title: const Text('Fecha del apartado'),
+                subtitle: Text(
+                  '${layaway.date.day.toString().padLeft(2, '0')}/'
+                  '${layaway.date.month.toString().padLeft(2, '0')}/${layaway.date.year}',
+                ),
+                trailing: inProcess ? const Icon(Icons.edit_calendar_outlined) : null,
+                onTap: !inProcess
+                    ? null
+                    : () async {
+                        final now = DateTime.now();
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: layaway.date.isAfter(now) ? now : layaway.date,
+                          firstDate: DateTime(2015),
+                          lastDate: now,
+                          helpText: 'Fecha en que se hizo el apartado',
+                        );
+                        if (picked == null || !context.mounted) return;
+                        final date = DateUtils.isSameDay(picked, now)
+                            ? now
+                            : DateTime(picked.year, picked.month, picked.day, 12);
+                        await runOrShowError(
+                          context,
+                          () => ref.read(layawaysRepositoryProvider).setDate(layawayId, date),
+                        );
+                      },
+              ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [

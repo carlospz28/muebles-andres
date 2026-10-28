@@ -701,13 +701,16 @@ Future<void> creditSupplierIfDirectPayment(
   AppDatabase db,
   PaymentLineInput line, {
   required String detail,
+  DateTime? date,
 }) async {
   if (line.method != 'SUPPLIER' || line.supplierId == null) return;
+  final when = date == null ? const Value<DateTime>.absent() : Value(date);
   await db.into(db.supplierPayments).insert(
         SupplierPaymentsCompanion.insert(
           supplierId: line.supplierId!,
           amount: line.amount,
           note: Value(detail),
+          date: when,
         ),
       );
   await db.into(db.cashMovements).insert(
@@ -718,6 +721,7 @@ Future<void> creditSupplierIfDirectPayment(
           detail: Value(detail),
           refType: 'SUPPLIER',
           refId: line.supplierId!,
+          date: when,
         ),
       );
 }

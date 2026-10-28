@@ -140,14 +140,29 @@ class LayawaysRepository {
     required int customerId,
     required int warehouseId,
     int? employeeId,
+    DateTime? date,
   }) async {
     return _db.into(_db.layaways).insert(
           LayawaysCompanion.insert(
             customerId: customerId,
             warehouseId: warehouseId,
             employeeId: Value(employeeId),
+            date: date == null ? const Value.absent() : Value(date),
           ),
         );
+  }
+
+  /// Cambia la fecha del apartado (para subir apartados viejos con la
+  /// fecha real en que se hicieron). Solo mientras está en proceso.
+  Future<void> setDate(int layawayId, DateTime date) async {
+    if (date.isAfter(DateTime.now())) {
+      throw StateError('La fecha del apartado no puede ser futura.');
+    }
+    await _db.transaction(() async {
+      await _requireInProcess(layawayId);
+      await (_db.update(_db.layaways)..where((l) => l.id.equals(layawayId)))
+          .write(LayawaysCompanion(date: Value(date)));
+    });
   }
 
   /// Agrega un producto al apartado. A diferencia de una venta directa, un
@@ -260,12 +275,22 @@ class LayawaysRepository {
 
   /// Registra un abono. La comisión de un apartado se calcula sobre cada
   /// abono (no sobre el total), tal como pidió el cliente.
+  ///
+  /// [date] es la fecha en que de verdad se recibió la plata (por defecto
+  /// ahora). Sirve para subir apartados viejos: un abono con fecha anterior
+  /// al último ajuste de caja no suma a la caja disponible, porque esa
+  /// plata ya estaba dentro del efectivo contado.
   Future<void> addPayment({
     required int layawayId,
     required List<PaymentLineInput> paymentLines,
     double commissionRate = 0,
+    DateTime? date,
   }) async {
     checkRate(commissionRate);
+    if (date != null && date.isAfter(DateTime.now())) {
+      throw StateError('La fecha del abono no puede ser futura.');
+    }
+    final when = date == null ? const Value<DateTime>.absent() : Value(date);
     await _db.transaction(() async {
       await _requireInProcess(layawayId);
       final total = paymentLines.fold<int>(0, (sum, l) => sum + l.amount);
@@ -277,6 +302,7 @@ class LayawaysRepository {
               totalAmount: Value(total),
               commissionRate: Value(commissionRate),
               commissionAmount: Value(commissionAmount),
+              date: when,
             ),
           );
 
@@ -299,6 +325,7 @@ class LayawaysRepository {
                 detail: Value('Abono apartado #$layawayId'),
                 refType: 'LAYAWAY',
                 refId: layawayId,
+                date: when,
               ),
             );
 
@@ -306,6 +333,7 @@ class LayawaysRepository {
           _db,
           line,
           detail: 'Pago directo desde abono apartado #$layawayId',
+          date: date,
         );
       }
     });
@@ -452,6 +480,15 @@ class LayawaysRepository {
       }
       final number = (maxNumber + 1).toString().padLeft(4, '0');
 
+      // La venta queda con la fecha del último abono (cuando el saldo llegó
+      // a cero): así un apartado viejo que se sube y factura hoy no infla
+      // las ventas de hoy. En el uso normal, el último abono es de hoy.
+      final lastPayment = await (_db.select(_db.payments)
+            ..where((p) => p.layawayId.equals(layawayId))
+            ..orderBy([(p) => OrderingTerm.desc(p.date)])
+            ..limit(1))
+          .getSingleOrNull();
+
       final saleId = await _db.into(_db.sales).insert(
             SalesCompanion.insert(
               number: number,
@@ -462,6 +499,7 @@ class LayawaysRepository {
               state: const Value('CONFIRMED'),
               subtotal: Value(totals.total),
               total: Value(totals.total),
+              date: lastPayment == null ? const Value.absent() : Value(lastPayment.date),
             ),
           );
 
