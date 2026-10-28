@@ -13,6 +13,8 @@ import '../sales/sales_providers.dart'
         checkKitLines,
         consumeItemFifo,
         creditSupplierIfDirectPayment,
+        deleteDirectSupplierRows,
+        purgeSale,
         refundPaymentLines;
 
 final layawaysStreamProvider = StreamProvider.autoDispose<List<Layaway>>((ref) {
@@ -336,6 +338,86 @@ class LayawaysRepository {
           date: date,
         );
       }
+    });
+  }
+
+  /// Borra el apartado como si nunca hubiera pasado (para equivocaciones o
+  /// pruebas), con todo lo que generó:
+  /// - en proceso o facturado sin entregar: libera la reserva;
+  /// - facturado y entregado: la mercancía vuelve a sus lotes y existencias;
+  /// - devuelto o cancelado: inventario y plata ya estaban devueltos;
+  /// y en todos los casos borra los abonos (la plata sale de la caja/cuenta
+  /// por donde entró, se revierten los pagos directos a proveedor), sus
+  /// comisiones, la devolución y la venta que se generó al facturar.
+  Future<void> deleteLayaway(int layawayId) async {
+    await _db.transaction(() async {
+      final layaway =
+          await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
+      final items =
+          await (_db.select(_db.layawayItems)..where((i) => i.layawayId.equals(layawayId))).get();
+      final sale = layaway.saleId == null
+          ? null
+          : await (_db.select(_db.sales)..where((s) => s.id.equals(layaway.saleId!))).getSingleOrNull();
+
+      final reserved = layaway.state == 'IN_PROCESS' || (layaway.state == 'INVOICED' && !layaway.delivered);
+      if (reserved) {
+        await _releaseReservation(layawayId, layaway.warehouseId);
+      }
+      if (layaway.state == 'INVOICED' && layaway.delivered && sale != null) {
+        // Salió de verdad: los lotes consumidos y las existencias vuelven.
+        final saleItems = await (_db.select(_db.saleItems)..where((i) => i.saleId.equals(sale.id))).get();
+        for (final it in saleItems) {
+          final consumptions = await (_db.select(_db.saleItemLotConsumptions)
+                ..where((c) => c.saleItemId.equals(it.id)))
+              .get();
+          for (final c in consumptions) {
+            final lot = await (_db.select(_db.productLots)..where((l) => l.id.equals(c.lotId)))
+                .getSingleOrNull();
+            if (lot != null) {
+              await (_db.update(_db.productLots)..where((l) => l.id.equals(lot.id)))
+                  .write(ProductLotsCompanion(quantityRemaining: Value(lot.quantityRemaining + c.quantity)));
+            }
+          }
+          final stock = await (_db.select(_db.stock)
+                ..where((s) => s.productId.equals(it.productId) & s.warehouseId.equals(layaway.warehouseId)))
+              .getSingleOrNull();
+          if (stock != null) {
+            await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id)))
+                .write(StockCompanion(quantity: Value(stock.quantity + it.quantity)));
+          }
+        }
+      }
+      await (_db.delete(_db.stockMovements)
+            ..where((m) => m.refType.equals('LAYAWAY') & m.refId.equals(layawayId)))
+          .go();
+
+      final payments =
+          await (_db.select(_db.payments)..where((p) => p.layawayId.equals(layawayId))).get();
+      if (payments.isNotEmpty) {
+        final ids = [for (final p in payments) p.id];
+        await (_db.delete(_db.paymentLines)..where((l) => l.paymentId.isIn(ids))).go();
+        await (_db.delete(_db.payments)..where((p) => p.id.isIn(ids))).go();
+      }
+      await (_db.delete(_db.cashMovements)
+            ..where((m) => m.refType.isIn(['LAYAWAY', 'LAYAWAY_RETURN']) & m.refId.equals(layawayId)))
+          .go();
+      await deleteDirectSupplierRows(
+        _db,
+        note: 'Pago directo desde abono apartado #$layawayId',
+        reversalPrefix: 'Reverso por devolución · Devolución apartado #$layawayId:',
+      );
+
+      await (_db.delete(_db.layawayReturns)..where((r) => r.layawayId.equals(layawayId))).go();
+      await (_db.update(_db.productionOrders)..where((o) => o.layawayId.equals(layawayId)))
+          .write(const ProductionOrdersCompanion(layawayId: Value(null)));
+      if (items.isNotEmpty) {
+        await (_db.delete(_db.layawayItems)..where((i) => i.layawayId.equals(layawayId))).go();
+      }
+      await (_db.delete(_db.layaways)..where((l) => l.id.equals(layawayId))).go();
+
+      // La venta generada al facturar (y su devolución, si la hubo). El
+      // inventario ya quedó resuelto arriba.
+      if (sale != null) await purgeSale(_db, sale, undoStock: false);
     });
   }
 

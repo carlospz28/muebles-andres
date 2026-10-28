@@ -229,6 +229,25 @@ class SalesRepository {
     });
   }
 
+  /// Borra la venta como si nunca hubiera pasado (para equivocaciones o
+  /// pruebas): la plata sale de la caja/cuenta por donde entró, la
+  /// mercancía vuelve a sus lotes, se revierte lo pagado directo a un
+  /// proveedor y desaparece su comisión. Una venta que salió de facturar
+  /// un apartado se borra desde el apartado.
+  Future<void> deleteSale(int saleId) async {
+    await _db.transaction(() async {
+      final sale = await (_db.select(_db.sales)..where((s) => s.id.equals(saleId))).getSingle();
+      final layaway = await (_db.select(_db.layaways)..where((l) => l.saleId.equals(saleId)))
+          .getSingleOrNull();
+      if (layaway != null) {
+        throw StateError(
+          'Esta venta salió del apartado #${layaway.id}: bórrala desde ese apartado.',
+        );
+      }
+      await purgeSale(_db, sale, undoStock: sale.state == 'CONFIRMED' && !sale.isReturn);
+    });
+  }
+
   Future<void> setDelivered(int saleId, bool delivered) async {
     await (_db.update(_db.sales)..where((s) => s.id.equals(saleId))).write(
       SalesCompanion(
@@ -471,6 +490,83 @@ class SalesRepository {
 final salesRepositoryProvider = Provider<SalesRepository>((ref) {
   return SalesRepository(ref.watch(databaseProvider));
 });
+
+/// Borra los pagos "directo a proveedor" (y sus reversos) que dejó una
+/// venta o un apartado, identificados por la nota con que se crearon.
+Future<void> deleteDirectSupplierRows(AppDatabase db, {required String note, required String reversalPrefix}) async {
+  await (db.delete(db.supplierPayments)
+        ..where((p) => p.note.equals(note) | p.note.like('$reversalPrefix%')))
+      .go();
+  await (db.delete(db.cashMovements)
+        ..where((m) =>
+            m.type.equals('SUPPLIER_PAYMENT') &
+            m.method.equals('SUPPLIER') &
+            (m.detail.equals(note) | m.detail.like('$reversalPrefix%'))))
+      .go();
+}
+
+/// Borra una venta y TODO su rastro (debe ir dentro de una transacción):
+/// ítems y consumos de lote, movimientos de inventario, pagos y sus
+/// líneas, filas del libro de caja (venta y devolución), pagos directos a
+/// proveedor y sus reversos, y la devolución si la hubo. Si [undoStock],
+/// primero devuelve la mercancía a sus lotes y a las existencias (venta
+/// confirmada que no se había devuelto).
+Future<void> purgeSale(AppDatabase db, Sale sale, {required bool undoStock}) async {
+  final items = await (db.select(db.saleItems)..where((i) => i.saleId.equals(sale.id))).get();
+  final itemIds = [for (final i in items) i.id];
+  final consumptions = itemIds.isEmpty
+      ? <SaleItemLotConsumption>[]
+      : await (db.select(db.saleItemLotConsumptions)..where((c) => c.saleItemId.isIn(itemIds))).get();
+
+  if (undoStock) {
+    for (final c in consumptions) {
+      final lot = await (db.select(db.productLots)..where((l) => l.id.equals(c.lotId))).getSingleOrNull();
+      if (lot != null) {
+        await (db.update(db.productLots)..where((l) => l.id.equals(lot.id)))
+            .write(ProductLotsCompanion(quantityRemaining: Value(lot.quantityRemaining + c.quantity)));
+      }
+    }
+    for (final it in items) {
+      final stock = await (db.select(db.stock)
+            ..where((s) => s.productId.equals(it.productId) & s.warehouseId.equals(sale.warehouseId)))
+          .getSingleOrNull();
+      if (stock != null) {
+        await (db.update(db.stock)..where((s) => s.id.equals(stock.id)))
+            .write(StockCompanion(quantity: Value(stock.quantity + it.quantity)));
+      }
+    }
+  }
+
+  if (itemIds.isNotEmpty) {
+    await (db.delete(db.saleItemLotConsumptions)..where((c) => c.saleItemId.isIn(itemIds))).go();
+  }
+  await (db.delete(db.stockMovements)
+        ..where((m) => m.refType.isIn(['SALE', 'SALE_RETURN']) & m.refId.equals(sale.id)))
+      .go();
+
+  final payments = await (db.select(db.payments)..where((p) => p.saleId.equals(sale.id))).get();
+  if (payments.isNotEmpty) {
+    final ids = [for (final p in payments) p.id];
+    await (db.delete(db.paymentLines)..where((l) => l.paymentId.isIn(ids))).go();
+    await (db.delete(db.payments)..where((p) => p.id.isIn(ids))).go();
+  }
+  await (db.delete(db.cashMovements)
+        ..where((m) =>
+            (m.refType.equals('SALE') & m.refId.equals(sale.id)) |
+            (m.refType.equals('SALE_RETURN') & m.refId.equals(sale.id))))
+      .go();
+  await deleteDirectSupplierRows(
+    db,
+    note: 'Pago directo desde venta ${sale.number}',
+    reversalPrefix: 'Reverso por devolución · Devolución venta ${sale.number}:',
+  );
+
+  await (db.delete(db.saleReturns)..where((r) => r.saleId.equals(sale.id))).go();
+  await (db.update(db.productionOrders)..where((o) => o.saleId.equals(sale.id)))
+      .write(const ProductionOrdersCompanion(saleId: Value(null)));
+  await (db.delete(db.saleItems)..where((i) => i.saleId.equals(sale.id))).go();
+  await (db.delete(db.sales)..where((s) => s.id.equals(sale.id))).go();
+}
 
 /// Unidades que salieron sin lote de inventario que las respaldara.
 class UncostedUnits {

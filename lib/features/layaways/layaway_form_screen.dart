@@ -260,6 +260,42 @@ class LayawayFormScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _deleteLayaway(BuildContext context, WidgetRef ref, Layaway layaway) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.delete_forever_outlined, color: Theme.of(context).colorScheme.error, size: 36),
+        title: Text('¿Borrar el apartado #$layawayId?'),
+        content: Text(
+          'Se borra como si nunca hubiera existido:\n'
+          '• Sus abonos: la plata sale de la caja o de la cuenta por donde entró '
+          '(y se revierte lo pagado directo a un proveedor).\n'
+          '• La mercancía reservada o entregada vuelve al inventario.\n'
+          '• Las comisiones de sus abonos.\n'
+          '${layaway.saleId != null ? '• La venta que se generó al facturarlo.\n' : ''}'
+          '\nÚsalo solo para equivocaciones o pruebas. NO se puede deshacer.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, borrar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final done = await runOrShowError(
+      context,
+      () => ref.read(layawaysRepositoryProvider).deleteLayaway(layawayId),
+    );
+    if (done && context.mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Apartado #$layawayId borrado.')));
+    }
+  }
+
   Future<void> _cancelWithoutInvoice(BuildContext context, WidgetRef ref) async {
     try {
       await ref.read(layawaysRepositoryProvider).cancelWithoutInvoice(layawayId);
@@ -556,6 +592,13 @@ class LayawayFormScreen extends ConsumerWidget {
                       ),
                     ),
                 ],
+                const SizedBox(height: 24),
+                TextButton.icon(
+                  onPressed: () => _deleteLayaway(context, ref, layaway),
+                  icon: const Icon(Icons.delete_forever_outlined),
+                  label: const Text('Borrar apartado (equivocación o prueba)'),
+                  style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
+                ),
               ],
             ],
           );
