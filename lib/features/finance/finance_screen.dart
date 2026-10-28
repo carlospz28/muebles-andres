@@ -347,7 +347,9 @@ class _CashFlowTab extends ConsumerWidget {
             ),
           _MovementSection('🧾 Ventas del día', d.sales),
           _MovementSection('💳 Abonos de apartados', d.layawayPayments),
-          if (d.otherIncomes.isNotEmpty) _MovementSection('🏦 Otros ingresos (retiros de consignación)', d.otherIncomes),
+          if (d.otherIncomes.isNotEmpty) _MovementSection('➕ Otros ingresos', d.otherIncomes),
+          if (d.internalMoves.isNotEmpty)
+            _MovementSection('🔁 Movimiento interno (retiros del banco a la caja, no es ingreso)', d.internalMoves),
           _MovementSection('🚚 Pagos a proveedores', d.supplierPayments),
           _MovementSection('💸 Salidas de caja (gastos, devoluciones, comisiones)', d.outflows),
         ],

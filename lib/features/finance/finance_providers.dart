@@ -80,6 +80,7 @@ class CashFlowData {
     required this.sales,
     required this.layawayPayments,
     required this.otherIncomes,
+    required this.internalMoves,
     required this.supplierPayments,
     required this.outflows,
   });
@@ -97,8 +98,12 @@ class CashFlowData {
   final List<CashMovement> sales;
   final List<CashMovement> layawayPayments;
 
-  /// Retiros de consignación a la caja y otros ingresos.
+  /// Otros ingresos reales (no ventas ni abonos).
   final List<CashMovement> otherIncomes;
+
+  /// Movimiento interno: plata del negocio que pasa del banco a la caja
+  /// (retiros de consignación). Cambia el efectivo pero NO es un ingreso.
+  final List<CashMovement> internalMoves;
   final List<CashMovement> supplierPayments;
 
   /// Gastos, devoluciones y pagos de comisión.
@@ -109,6 +114,9 @@ class CashFlowData {
   int get ingresosVentas => _sum(sales);
   int get ingresosAbonos => _sum(layawayPayments);
   int get otrosIngresos => _sum(otherIncomes);
+  int get movimientoInterno => _sum(internalMoves);
+
+  /// Ingresos reales del día (sin los movimientos internos).
   int get totalIn => ingresosVentas + ingresosAbonos + otrosIngresos;
   int get egresosCaja => -_sum(outflows);
   int get egresosProveedores => -_sum(supplierPayments);
@@ -117,7 +125,7 @@ class CashFlowData {
   /// Entradas y salidas de todo el día separadas por forma de pago.
   Map<String, int> get netByMethod {
     final m = <String, int>{};
-    for (final x in [...sales, ...layawayPayments, ...otherIncomes, ...supplierPayments, ...outflows]) {
+    for (final x in [...sales, ...layawayPayments, ...otherIncomes, ...internalMoves, ...supplierPayments, ...outflows]) {
       m[x.method] = (m[x.method] ?? 0) + x.amount;
     }
     return m;
@@ -145,8 +153,11 @@ final cashFlowProvider = StreamProvider.autoDispose<CashFlowData>((ref) {
       sales: moves.where((m) => m.type == 'SALE').toList(),
       layawayPayments: moves.where((m) => m.type == 'LAYAWAY_PAYMENT').toList(),
       otherIncomes: moves
-          .where((m) => m.amount > 0 && m.type != 'SALE' && m.type != 'LAYAWAY_PAYMENT')
+          .where((m) =>
+              m.amount > 0 &&
+              !const {'SALE', 'LAYAWAY_PAYMENT', 'ACCOUNT_WITHDRAWAL', 'SUPPLIER_PAYMENT'}.contains(m.type))
           .toList(),
+      internalMoves: moves.where((m) => m.type == 'ACCOUNT_WITHDRAWAL').toList(),
       supplierPayments: moves.where((m) => m.type == 'SUPPLIER_PAYMENT').toList(),
       outflows: moves.where((m) => m.amount < 0 && m.type != 'SUPPLIER_PAYMENT').toList(),
     );

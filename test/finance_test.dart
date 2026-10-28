@@ -39,6 +39,34 @@ void main() {
     await db.close();
   });
 
+  test('#13 un retiro del banco a la caja no es ingreso: es movimiento interno', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(db)]);
+    addTearDown(container.dispose);
+    final today = dayStart(DateTime.now());
+    Future<void> move(String type, int amount, {String method = 'CASH'}) =>
+        db.into(db.cashMovements).insert(CashMovementsCompanion.insert(
+              type: type,
+              amount: amount,
+              method: Value(method),
+              refType: type,
+              refId: 1,
+              date: Value(today.add(const Duration(hours: 10))),
+            ));
+    await move('SALE', 500000);
+    await move('ACCOUNT_WITHDRAWAL', 1000000);
+    // Reverso de un abono directo a proveedor (#3): no es "otro ingreso".
+    await move('SUPPLIER_PAYMENT', 80000, method: 'SUPPLIER');
+    container.read(cashFlowDateProvider.notifier).state = today;
+
+    final flow = await container.read(cashFlowProvider.future);
+    expect(flow.totalIn, 500000, reason: 'antes sumaba también el retiro (1.500.000)');
+    expect(flow.movimientoInterno, 1000000);
+    expect(flow.otrosIngresos, 0);
+    expect(flow.closingCash, 1500000, reason: 'el retiro sí aumenta el efectivo');
+    await db.close();
+  });
+
   test('"Ajustar caja" de Inicio (hora real) y Finanzas ven la misma caja', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     final repo = CashRepository(db);
