@@ -14,7 +14,8 @@ class Layaways extends Table {
   DateTimeColumn get date => dateTime().withDefault(currentDateAndTime)();
   TextColumn get notes => text().withDefault(const Constant(''))();
 
-  /// 'IN_PROCESS' | 'CANCELLED_NO_INVOICE' | 'INVOICED'
+  /// 'IN_PROCESS' | 'CANCELLED_NO_INVOICE' | 'INVOICED' | 'RETURNED' (su venta
+  /// facturada se devolvió)
   TextColumn get state => text().withDefault(const Constant('IN_PROCESS'))();
 
   /// Venta generada al facturar el apartado (cuando queda saldado).

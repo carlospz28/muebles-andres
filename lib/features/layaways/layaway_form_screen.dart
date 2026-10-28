@@ -441,7 +441,9 @@ class LayawayFormScreen extends ConsumerWidget {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Entregado al cliente'),
                   subtitle: Text(
-                    layaway.state != 'INVOICED'
+                    layaway.state == 'RETURNED'
+                        ? 'La venta de este apartado se devolvió: no se entrega.'
+                        : layaway.state != 'INVOICED'
                         ? 'Se activa cuando el apartado ya esté facturado (saldo en \$0).'
                         : layaway.delivered
                             ? 'Inventario ya descontado.'

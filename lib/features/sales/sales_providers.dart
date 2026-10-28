@@ -413,6 +413,12 @@ class SalesRepository {
 
       await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
           .write(const SalesCompanion(isReturn: Value(true)));
+
+      // Si la venta salió de facturar un apartado, el apartado también
+      // queda devuelto: así nunca se puede marcar "Entregado" y descontar
+      // inventario de una venta que ya se devolvió.
+      await (_db.update(_db.layaways)..where((l) => l.saleId.equals(saleId)))
+          .write(const LayawaysCompanion(state: Value('RETURNED')));
     });
   }
 }

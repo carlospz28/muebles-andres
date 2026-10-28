@@ -450,6 +450,17 @@ class LayawaysRepository {
       final layaway =
           await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
 
+      if (layaway.state == 'RETURNED') {
+        throw StateError('La venta de este apartado fue devuelta: ya no se puede entregar.');
+      }
+      if (layaway.saleId != null) {
+        final sale = await (_db.select(_db.sales)..where((s) => s.id.equals(layaway.saleId!)))
+            .getSingleOrNull();
+        if (sale != null && sale.isReturn) {
+          throw StateError('La venta de este apartado fue devuelta: ya no se puede entregar.');
+        }
+      }
+
       final shouldFulfill = delivered &&
           !layaway.delivered &&
           layaway.state == 'INVOICED' &&
