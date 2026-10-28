@@ -138,8 +138,8 @@ class LayawaysScreen extends ConsumerWidget {
                           subtitle: Text(
                             totals == null
                                 ? '...'
-                                : 'Total ${formatCopWithSymbol(totals.total)} · '
-                                    'Saldo ${formatCopWithSymbol(totals.balance)}'
+                                : 'Total ${formatCopWithSymbol(totals.total)}'
+                                    '${l.state == 'IN_PROCESS' || l.state == 'INVOICED' ? ' · Saldo ${formatCopWithSymbol(totals.balance)}' : ''}'
                                     '${l.state == 'IN_PROCESS' ? (l.delivered ? ' · Entregado' : ' · Sin entregar') : ''}',
                           ),
                           trailing: Chip(

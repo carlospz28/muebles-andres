@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
-import '../sales/sales_providers.dart' show PaymentLineInput, creditSupplierIfDirectPayment;
+import '../sales/sales_providers.dart' show PaymentLineInput, creditSupplierIfDirectPayment, refundPaymentLines;
 
 final layawaysStreamProvider = StreamProvider.autoDispose<List<Layaway>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -323,15 +323,19 @@ class LayawaysRepository {
             ),
           );
 
-      await _db.into(_db.cashMovements).insert(
-            CashMovementsCompanion.insert(
-              type: 'LAYAWAY_REFUND',
-              amount: -paid,
-              detail: Value('Devolución apartado #$layawayId: $reason'),
-              refType: 'LAYAWAY_RETURN',
-              refId: layawayId,
-            ),
-          );
+      // Se devuelve por las mismas formas de pago de cada abono.
+      final payments =
+          await (_db.select(_db.payments)..where((p) => p.layawayId.equals(layawayId))).get();
+      await refundPaymentLines(
+        _db,
+        payments: payments,
+        layawayId: layawayId,
+        fallbackAmount: paid,
+        type: 'LAYAWAY_REFUND',
+        refType: 'LAYAWAY_RETURN',
+        refId: layawayId,
+        detail: 'Devolución apartado #$layawayId: $reason',
+      );
 
       await (_db.update(_db.layaways)..where((l) => l.id.equals(layawayId)))
           .write(const LayawaysCompanion(state: Value('CANCELLED_NO_INVOICE')));

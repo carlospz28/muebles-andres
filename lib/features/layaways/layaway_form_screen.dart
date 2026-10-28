@@ -434,8 +434,12 @@ class LayawayFormScreen extends ConsumerWidget {
               const Divider(height: 32),
               if (totals != null) ...[
                 _TotalsRow(label: 'Total', value: totals.total),
-                _TotalsRow(label: 'Pagado', value: totals.paid),
-                _TotalsRow(label: 'Saldo', value: totals.balance, bold: true),
+                if (layaway.state == 'IN_PROCESS' || layaway.state == 'INVOICED') ...[
+                  _TotalsRow(label: 'Pagado', value: totals.paid),
+                  _TotalsRow(label: 'Saldo', value: totals.balance, bold: true),
+                ] else
+                  // Devuelto o cancelado: lo abonado ya se le devolvió.
+                  _TotalsRow(label: 'Pagado (neto, tras la devolución)', value: totals.paid),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -464,11 +468,15 @@ class LayawayFormScreen extends ConsumerWidget {
                     children: [
                       for (final p in payments)
                         ListTile(
-                          leading: const Icon(Icons.payments_outlined),
-                          title: Text(formatCopWithSymbol(p.totalAmount)),
+                          leading: Icon(p.totalAmount < 0 ? Icons.undo : Icons.payments_outlined),
+                          title: Text(p.totalAmount < 0
+                              ? 'Devolución · ${formatCopWithSymbol(-p.totalAmount)}'
+                              : formatCopWithSymbol(p.totalAmount)),
                           subtitle: Text(
-                            'Comisión ${p.commissionRate.toStringAsFixed(1)}%: '
-                            '${formatCopWithSymbol(p.commissionAmount)}',
+                            p.totalAmount < 0
+                                ? 'Se devolvió por las mismas formas de pago'
+                                : 'Comisión ${p.commissionRate.toStringAsFixed(1)}%: '
+                                    '${formatCopWithSymbol(p.commissionAmount)}',
                           ),
                           trailing: Text(
                             '${p.date.day}/${p.date.month}/${p.date.year}',

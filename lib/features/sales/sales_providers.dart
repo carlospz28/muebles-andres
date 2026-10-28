@@ -401,15 +401,27 @@ class SalesRepository {
             ),
           );
 
-      await _db.into(_db.cashMovements).insert(
-            CashMovementsCompanion.insert(
-              type: 'SALE_REFUND',
-              amount: -sale.total,
-              detail: Value('Devolución venta ${sale.number}: $reason'),
-              refType: 'SALE_RETURN',
-              refId: saleId,
-            ),
-          );
+      // La plata se devuelve por las mismas formas de pago con que entró:
+      // los abonos del apartado si la venta salió de uno, o los pagos de la
+      // venta directa.
+      final fromLayaway = await (_db.select(_db.layaways)..where((l) => l.saleId.equals(saleId)))
+          .getSingleOrNull();
+      final originalPayments = await (_db.select(_db.payments)
+            ..where((p) => fromLayaway != null
+                ? p.layawayId.equals(fromLayaway.id)
+                : p.saleId.equals(saleId)))
+          .get();
+      await refundPaymentLines(
+        _db,
+        payments: originalPayments,
+        saleId: fromLayaway == null ? saleId : null,
+        layawayId: fromLayaway?.id,
+        fallbackAmount: sale.total,
+        type: 'SALE_REFUND',
+        refType: 'SALE_RETURN',
+        refId: saleId,
+        detail: 'Devolución venta ${sale.number}: $reason',
+      );
 
       await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
           .write(const SalesCompanion(isReturn: Value(true)));
@@ -426,6 +438,99 @@ class SalesRepository {
 final salesRepositoryProvider = Provider<SalesRepository>((ref) {
   return SalesRepository(ref.watch(databaseProvider));
 });
+
+/// Devuelve la plata de [payments] por las MISMAS formas de pago con que
+/// entró, línea por línea (debe llamarse dentro de una transacción):
+/// - deja un pago de "Devolución" con líneas negativas (mismo método y
+///   cuenta), así el saldo de cada cuenta de consignación baja lo que
+///   corresponde;
+/// - escribe una fila [type] en el libro por cada línea, con su método;
+/// - si la línea fue directo a un proveedor, revierte también ese abono
+///   (la deuda con el proveedor vuelve a subir; no toca caja ni banco).
+/// Si no hay líneas de pago (ventas muy viejas), devuelve [fallbackAmount]
+/// en efectivo como antes.
+Future<void> refundPaymentLines(
+  AppDatabase db, {
+  required List<Payment> payments,
+  int? saleId,
+  int? layawayId,
+  required int fallbackAmount,
+  required String type,
+  required String refType,
+  required int refId,
+  required String detail,
+}) async {
+  final paymentIds = [for (final p in payments) if (p.totalAmount > 0) p.id];
+  final lines = paymentIds.isEmpty
+      ? <PaymentLine>[]
+      : await (db.select(db.paymentLines)
+            ..where((l) => l.paymentId.isIn(paymentIds) & l.amount.isBiggerThanValue(0)))
+          .get();
+
+  if (lines.isEmpty) {
+    await db.into(db.cashMovements).insert(
+          CashMovementsCompanion.insert(
+            type: type,
+            amount: -fallbackAmount,
+            detail: Value(detail),
+            refType: refType,
+            refId: refId,
+          ),
+        );
+    return;
+  }
+
+  final total = lines.fold<int>(0, (a, l) => a + l.amount);
+  final refundPaymentId = await db.into(db.payments).insert(
+        PaymentsCompanion.insert(
+          saleId: Value(saleId),
+          layawayId: Value(layawayId),
+          totalAmount: Value(-total),
+          note: Value(detail),
+        ),
+      );
+
+  for (final line in lines) {
+    await db.into(db.paymentLines).insert(
+          PaymentLinesCompanion.insert(
+            paymentId: refundPaymentId,
+            method: line.method,
+            amount: -line.amount,
+            accountId: Value(line.accountId),
+            supplierId: Value(line.supplierId),
+          ),
+        );
+    await db.into(db.cashMovements).insert(
+          CashMovementsCompanion.insert(
+            type: type,
+            amount: -line.amount,
+            method: Value(line.method),
+            detail: Value(detail),
+            refType: refType,
+            refId: refId,
+          ),
+        );
+    if (line.method == 'SUPPLIER' && line.supplierId != null) {
+      await db.into(db.supplierPayments).insert(
+            SupplierPaymentsCompanion.insert(
+              supplierId: line.supplierId!,
+              amount: -line.amount,
+              note: Value('Reverso por devolución · $detail'),
+            ),
+          );
+      await db.into(db.cashMovements).insert(
+            CashMovementsCompanion.insert(
+              type: 'SUPPLIER_PAYMENT',
+              amount: line.amount,
+              method: const Value('SUPPLIER'),
+              detail: Value('Reverso por devolución · $detail'),
+              refType: 'SUPPLIER',
+              refId: line.supplierId!,
+            ),
+          );
+    }
+  }
+}
 
 /// Si la línea de pago fue directo a un proveedor (el cliente le manda la
 /// plata a, por ejemplo, un proveedor para cubrir el pedido, sin que pase
