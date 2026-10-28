@@ -43,7 +43,7 @@ class AuditScreen extends ConsumerWidget {
                 .where((e) => !e.date.isBefore(start) && e.date.isBefore(end))
                 .toList();
           }
-          final total = entries.fold<int>(0, (sum, e) => sum + e.amount);
+          final totals = auditTotals(entries);
 
           return Column(
             children: [
@@ -57,7 +57,7 @@ class AuditScreen extends ConsumerWidget {
                       selected: filter == null,
                       onSelected: (_) => ref.read(_auditFilterProvider.notifier).state = null,
                     ),
-                    for (final c in const ['Gasto', 'Compra de mercancía', 'Comisión'])
+                    for (final c in AuditCategory.all)
                       ChoiceChip(
                         label: Text(c),
                         selected: filter == c,
@@ -100,20 +100,33 @@ class AuditScreen extends ConsumerWidget {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
                   children: [
-                    Text(
-                      filter == null ? 'Total salido' : 'Total en $filter',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Text(
-                      formatCopWithSymbol(total),
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
+                    if (filter != AuditCategory.purchase)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            filter == null ? 'Total salido (plata real)' : 'Total en $filter',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          Text(
+                            formatCopWithSymbol(totals.outflow),
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    if (filter == null || filter == AuditCategory.purchase)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Compras (compromiso, no se suma: su pago va en "Pago a proveedor")'),
+                          Text(formatCopWithSymbol(totals.committed)),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -129,7 +142,8 @@ class AuditScreen extends ConsumerWidget {
                           return ListTile(
                             leading: Icon(switch (e.category) {
                               'Gasto' => Icons.receipt_long_outlined,
-                              'Compra de mercancía' => Icons.local_shipping_outlined,
+                              AuditCategory.purchase => Icons.local_shipping_outlined,
+                              AuditCategory.supplierPayment => Icons.payments_outlined,
                               'Comisión' => Icons.percent,
                               _ => Icons.attach_money,
                             }),
@@ -140,10 +154,14 @@ class AuditScreen extends ConsumerWidget {
                               '${e.date.month.toString().padLeft(2, '0')}/${e.date.year}',
                             ),
                             trailing: Text(
-                              '-${formatCopWithSymbol(e.amount)}',
+                              e.isOutflow
+                                  ? '-${formatCopWithSymbol(e.amount)}'
+                                  : formatCopWithSymbol(e.amount),
                               style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.error,
+                                fontWeight: e.isOutflow ? FontWeight.bold : null,
+                                color: e.isOutflow
+                                    ? Theme.of(context).colorScheme.error
+                                    : Theme.of(context).colorScheme.outline,
                               ),
                             ),
                           );
