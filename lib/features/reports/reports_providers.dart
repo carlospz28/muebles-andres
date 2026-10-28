@@ -253,6 +253,9 @@ class EmployeeCommission {
   final int totalSales;
 }
 
+/// Estados de apartado cuyos abonos se le devolvieron al cliente.
+const _returnedLayawayStates = ['CANCELLED_NO_INVOICE', 'RETURNED'];
+
 /// Fecha del último pago de comisión por vendedor (si ha tenido alguno).
 Future<Map<int, DateTime>> _lastCommissionPaymentByEmployee(AppDatabase db) async {
   final rows = await (db.select(db.cashMovements)
@@ -285,7 +288,7 @@ Future<Map<int, int>> _salesTotalByEmployee(
   final totals = <int, int>{};
 
   final saleRows = await (db.select(db.sales)
-        ..where((s) => s.state.equals('CONFIRMED') & s.employeeId.isNotNull()))
+        ..where((s) => s.state.equals('CONFIRMED') & s.isReturn.equals(false) & s.employeeId.isNotNull()))
       .get();
   for (final s in saleRows) {
     if (s.employeeId == null) continue;
@@ -318,8 +321,9 @@ Future<Map<int, int>> _earnedCommissionsByEmployee(
 }) async {
   final totals = <int, int>{};
 
+  // Las ventas devueltas no generan comisión (la plata se devolvió).
   final saleQuery = db.select(db.sales)
-    ..where((s) => s.state.equals('CONFIRMED') & s.employeeId.isNotNull());
+    ..where((s) => s.state.equals('CONFIRMED') & s.isReturn.equals(false) & s.employeeId.isNotNull());
   if (start != null && end != null) {
     saleQuery.where(
       (s) => s.date.isBiggerOrEqualValue(start) & s.date.isSmallerThanValue(end),
@@ -331,10 +335,12 @@ Future<Map<int, int>> _earnedCommissionsByEmployee(
     totals[s.employeeId!] = (totals[s.employeeId!] ?? 0) + s.commissionAmount;
   }
 
+  // Tampoco los abonos de apartados devueltos o cancelados.
   final paymentQuery = db.select(db.payments).join([
     innerJoin(db.layaways, db.layaways.id.equalsExp(db.payments.layawayId)),
   ])
-    ..where(db.payments.layawayId.isNotNull());
+    ..where(db.payments.layawayId.isNotNull() &
+        db.layaways.state.isIn(_returnedLayawayStates).not());
   if (start != null && end != null) {
     paymentQuery.where(
       db.payments.date.isBiggerOrEqualValue(start) & db.payments.date.isSmallerThanValue(end),
