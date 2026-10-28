@@ -65,6 +65,10 @@ dependencies:
   share_plus: ^10.1.2
   file_picker: ^8.1.2
 
+  # Exportar inventario y costos a Excel (.xlsx = zip de XML). Se usa la
+  # misma versión que ya trae pdf/printing para no cambiar nada de ellos.
+  archive: ^4.0.0
+
 dependency_overrides:
   # file_picker 8.3.7 arrastra una versión de flutter_plugin_android_lifecycle
   # que exige compileSdk 36 y rompe el build de release; se fija a una

@@ -1,7 +1,14 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/db/backup_service.dart';
+import '../../core/export/inventory_export.dart';
 import '../../core/providers.dart';
 
 /// Respaldo y restauración de la base de datos — para que una
@@ -30,6 +37,63 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('No se pudo hacer la copia: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  /// Descarga a Excel el inventario con el costo de cada producto. En el
+  /// PC pregunta dónde guardarlo; en la tablet lo comparte (WhatsApp,
+  /// correo, Drive...), igual que la copia de seguridad.
+  Future<void> _exportInventory() async {
+    setState(() => _working = true);
+    try {
+      final now = DateTime.now();
+      String two(int n) => n.toString().padLeft(2, '0');
+      final fileName = 'Inventario_${now.year}-${two(now.month)}-${two(now.day)}.xlsx';
+      final bytes = await buildInventoryExcel(ref.read(databaseProvider));
+
+      if (Platform.isWindows) {
+        final docs = await getApplicationDocumentsDirectory();
+        final target = await FilePicker.platform.saveFile(
+          dialogTitle: 'Guardar Excel de inventario',
+          fileName: fileName,
+          initialDirectory: docs.path,
+          type: FileType.custom,
+          allowedExtensions: ['xlsx'],
+        );
+        if (target == null) return;
+        final path = target.toLowerCase().endsWith('.xlsx') ? target : '$target.xlsx';
+        await File(path).writeAsBytes(bytes, flush: true);
+        if (!mounted) return;
+        final open = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Excel guardado'),
+            content: Text('Se guardó en:\n$path\n\n¿Abrirlo ahora?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Abrir')),
+            ],
+          ),
+        );
+        if (open == true) await Process.run('cmd', ['/c', 'start', '', path]);
+      } else {
+        final tempDir = await getTemporaryDirectory();
+        final file = File(p.join(tempDir.path, fileName));
+        await file.writeAsBytes(bytes, flush: true);
+        await Share.shareXFiles([XFile(file.path)], text: 'Inventario Muebles Omar', subject: 'Inventario Muebles Omar');
+      }
+    } on FileSystemException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No se pudo guardar: ¿el archivo está abierto en Excel? Ciérralo e intenta de nuevo.'),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo generar el Excel: $e')));
       }
     } finally {
       if (mounted) setState(() => _working = false);
@@ -102,6 +166,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Inventario en Excel', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Descarga un archivo de Excel con todos los productos: existencias, el costo '
+                    'que se les puso al ingresarlos (en Ingreso de inventario o en Compras), el '
+                    'precio de venta, el valor del inventario y el detalle de cada ingreso.',
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _working ? null : _exportInventory,
+                    icon: const Icon(Icons.table_view_outlined),
+                    label: const Text('Descargar inventario (Excel)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
