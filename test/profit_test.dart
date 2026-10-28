@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muebles_andres/core/db/database.dart';
 import 'package:muebles_andres/core/providers.dart';
 import 'package:muebles_andres/features/expenses/expenses_providers.dart';
+import 'package:muebles_andres/features/home/home_screen.dart';
 import 'package:muebles_andres/features/reports/reports_providers.dart';
 
 import 'helpers.dart';
@@ -58,5 +59,23 @@ void main() {
     expect(p.expenses, 70000);
     expect(p.commissions, 50000);
     expect(p.netProfit, expectedNet);
+  });
+
+  test('#9 Inicio: "Utilidad" coincide con Análisis y "Flujo neto" es el flujo de caja', () async {
+    await buildScenario(shop);
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
+    addTearDown(container.dispose);
+    container.read(reportPeriodProvider.notifier).state = ReportPeriod.month;
+
+    final home = await container.read(homeTotalsProvider.future);
+    final analysis = await container.read(profitSummaryProvider.future);
+
+    expect(home.profit.netProfit, expectedNet);
+    expect(home.profit.netProfit, analysis.netProfit, reason: 'Inicio y Análisis, misma utilidad');
+    expect(home.profit.utility, analysis.utility);
+
+    // El flujo neto es plata: entró 1.000.000 + 800.000 + 300.000, salió
+    // 300.000 (devolución) + 70.000 (gasto). La comisión aún no se paga.
+    expect(home.netProfitPeriod, 1000000 + 800000 + 300000 - 300000 - 70000);
   });
 }
