@@ -32,10 +32,13 @@ class LayawayListItem {
 final layawaysWithCustomerProvider =
     StreamProvider.autoDispose<List<LayawayListItem>>((ref) {
   final db = ref.watch(databaseProvider);
+  // Por número (el más nuevo arriba), no por fecha: así un apartado no
+  // cambia de puesto en la lista cuando se le corrige la fecha (eso hacía
+  // que, al volver a tocar el mismo lugar, se abriera otro apartado).
   final query = db.select(db.layaways).join([
     innerJoin(db.customers, db.customers.id.equalsExp(db.layaways.customerId)),
   ])
-    ..orderBy([OrderingTerm.desc(db.layaways.date)]);
+    ..orderBy([OrderingTerm.desc(db.layaways.id)]);
 
   return query.watch().map((rows) {
     return rows

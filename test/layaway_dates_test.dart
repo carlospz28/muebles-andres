@@ -1,5 +1,8 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:muebles_andres/core/providers.dart';
 import 'package:muebles_andres/features/cash/cash_providers.dart';
+import 'package:muebles_andres/features/layaways/layaways_providers.dart';
 import 'package:muebles_andres/features/reports/reports_providers.dart';
 import 'package:muebles_andres/features/sales/sales_providers.dart';
 
@@ -57,6 +60,26 @@ void main() {
     expect(todayProfit.netSales, 0, reason: 'no aparece como venta de hoy');
     final april = await loadProfit(shop.db, DateTime(2026, 4, 1), DateTime(2026, 5, 1));
     expect(april.netSales, 1000000);
+  });
+
+  test('cambiar la fecha de un apartado no toca la de los demás, y la lista no los reordena', () async {
+    final a = await shop.layaways.createDraft(customerId: shop.customerId, warehouseId: shop.warehouseId, date: old);
+    final b = await shop.layaways.createDraft(
+        customerId: shop.customerId, warehouseId: shop.warehouseId, date: DateTime(2026, 5, 1, 12));
+    final c = await shop.layaways.createDraft(customerId: shop.customerId, warehouseId: shop.warehouseId);
+    final bBefore = (await shop.layaway(b)).date;
+    final cBefore = (await shop.layaway(c)).date;
+
+    await shop.layaways.setDate(a, DateTime(2026, 9, 9, 12));
+
+    expect((await shop.layaway(a)).date, DateTime(2026, 9, 9, 12));
+    expect((await shop.layaway(b)).date, bBefore);
+    expect((await shop.layaway(c)).date, cBefore);
+
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
+    addTearDown(container.dispose);
+    final list = await container.read(layawaysWithCustomerProvider.future);
+    expect([for (final i in list) i.layaway.id], [c, b, a], reason: 'por número, el más nuevo arriba');
   });
 
   test('el abono no puede tener fecha futura', () async {
