@@ -78,4 +78,20 @@ void main() {
     // 300.000 (devolución) + 70.000 (gasto). La comisión aún no se paga.
     expect(home.netProfitPeriod, 1000000 + 800000 + 300000 - 300000 - 70000);
   });
+
+  test('#5 Inicio: "Ventas de hoy" y "Ventas del periodo" incluyen el apartado facturado', () async {
+    await buildScenario(shop);
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
+    addTearDown(container.dispose);
+    container.read(reportPeriodProvider.notifier).state = ReportPeriod.month;
+
+    final home = await container.read(homeTotalsProvider.future);
+    final analysis = await container.read(profitSummaryProvider.future);
+
+    // Antes solo sumaba la plata de ventas directas (1.000.000 + 300.000
+    // − 300.000) y dejaba por fuera el apartado facturado de 800.000.
+    expect(home.salesPeriod, expectedNetSales);
+    expect(home.salesPeriod, analysis.netSales);
+    expect(home.salesToday, expectedNetSales, reason: 'todo el escenario ocurre hoy');
+  });
 }

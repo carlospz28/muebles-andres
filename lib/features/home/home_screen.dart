@@ -284,10 +284,14 @@ Future<_HomeTotalsSnapshot> _loadTotals(
     return row.read(db.cashMovements.amount.sum()) ?? 0;
   }
 
-  // Ventas = ingresos totales (efectivo + consignación), es la cifra de
-  // negocio.
-  final salesToday = await sumSince(startOfDay, type: 'SALE');
-  final salesPeriod = await sumSince(periodStart, type: 'SALE', until: periodEnd);
+  // Ventas = ventas netas con la regla única de loadProfit (igual que
+  // Análisis y Finanzas): ventas confirmadas, incluidas las que salen de
+  // facturar un apartado, menos devoluciones. No es la plata cobrada (esa
+  // está en el flujo neto y en la caja).
+  final profit = await loadProfit(db, periodStart, periodEnd);
+  final salesToday =
+      (await loadProfit(db, startOfDay, startOfDay.add(const Duration(days: 1)))).netSales;
+  final salesPeriod = profit.netSales;
 
   // Flujo neto = todo lo que entró menos todo lo que salió (ventas,
   // abonos, gastos, compras a proveedores, comisiones, devoluciones).
@@ -316,7 +320,7 @@ Future<_HomeTotalsSnapshot> _loadTotals(
     salesToday: salesToday,
     salesPeriod: salesPeriod,
     netProfitPeriod: netProfitPeriod,
-    profit: await loadProfit(db, periodStart, periodEnd),
+    profit: profit,
     cashToday: cash.amount,
     openingCash: cash.openingCash,
     activeLayaways: activeLayaways,
