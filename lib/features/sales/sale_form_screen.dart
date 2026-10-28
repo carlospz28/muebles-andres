@@ -430,6 +430,8 @@ class SaleFormScreen extends ConsumerWidget {
                             icon: const Icon(Icons.check),
                             label: const Text('Cobrar y confirmar'),
                           ),
+                          const SizedBox(height: 24),
+                          _DeleteSaleButton(sale: sale),
                         ],
                       )
                     : (isConfirmed
@@ -452,6 +454,8 @@ class SaleFormScreen extends ConsumerWidget {
                                   ),
                                 ),
                               ],
+                              const SizedBox(height: 24),
+                              _DeleteSaleButton(sale: sale),
                             ],
                           )
                         : const SizedBox.shrink()),
@@ -484,6 +488,58 @@ class _TotalsRow extends StatelessWidget {
           Text(formatCopWithSymbol(value), style: style),
         ],
       ),
+    );
+  }
+}
+
+/// Borra la venta como si nunca hubiera pasado (equivocaciones o pruebas).
+class _DeleteSaleButton extends ConsumerWidget {
+  const _DeleteSaleButton({required this.sale});
+  final Sale sale;
+
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final confirmed = sale.state == 'CONFIRMED';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(Icons.delete_forever_outlined, color: Theme.of(context).colorScheme.error, size: 36),
+        title: Text('¿Borrar la venta ${sale.number}?'),
+        content: Text(
+          confirmed
+              ? 'Se borra como si nunca hubiera existido:\n'
+                  '• La plata sale de la caja o de la cuenta por donde entró '
+                  '(y se revierte lo pagado directo a un proveedor).\n'
+                  '• La mercancía vuelve al inventario.\n'
+                  '• Su comisión deja de contar.\n\n'
+                  'Úsalo solo para equivocaciones o pruebas. Si el cliente devolvió '
+                  'el mueble, usa "Devolver venta". NO se puede deshacer.'
+              : 'Se borra este borrador con sus productos. No mueve plata ni inventario.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, borrar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final done = await runOrShowError(context, () => ref.read(salesRepositoryProvider).deleteSale(sale.id));
+    if (done && context.mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Venta ${sale.number} borrada.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return TextButton.icon(
+      onPressed: () => _delete(context, ref),
+      icon: const Icon(Icons.delete_forever_outlined),
+      label: Text(sale.state == 'CONFIRMED' ? 'Borrar venta (equivocación o prueba)' : 'Borrar borrador'),
+      style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
     );
   }
 }

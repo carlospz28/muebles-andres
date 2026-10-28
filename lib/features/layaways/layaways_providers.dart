@@ -13,6 +13,8 @@ import '../sales/sales_providers.dart'
         checkKitLines,
         consumeItemFifo,
         creditSupplierIfDirectPayment,
+        deleteDirectSupplierRows,
+        purgeSale,
         refundPaymentLines;
 
 final layawaysStreamProvider = StreamProvider.autoDispose<List<Layaway>>((ref) {
@@ -140,14 +142,29 @@ class LayawaysRepository {
     required int customerId,
     required int warehouseId,
     int? employeeId,
+    DateTime? date,
   }) async {
     return _db.into(_db.layaways).insert(
           LayawaysCompanion.insert(
             customerId: customerId,
             warehouseId: warehouseId,
             employeeId: Value(employeeId),
+            date: date == null ? const Value.absent() : Value(date),
           ),
         );
+  }
+
+  /// Cambia la fecha del apartado (para subir apartados viejos con la
+  /// fecha real en que se hicieron). Solo mientras está en proceso.
+  Future<void> setDate(int layawayId, DateTime date) async {
+    if (date.isAfter(DateTime.now())) {
+      throw StateError('La fecha del apartado no puede ser futura.');
+    }
+    await _db.transaction(() async {
+      await _requireInProcess(layawayId);
+      await (_db.update(_db.layaways)..where((l) => l.id.equals(layawayId)))
+          .write(LayawaysCompanion(date: Value(date)));
+    });
   }
 
   /// Agrega un producto al apartado. A diferencia de una venta directa, un
@@ -260,12 +277,22 @@ class LayawaysRepository {
 
   /// Registra un abono. La comisión de un apartado se calcula sobre cada
   /// abono (no sobre el total), tal como pidió el cliente.
+  ///
+  /// [date] es la fecha en que de verdad se recibió la plata (por defecto
+  /// ahora). Sirve para subir apartados viejos: un abono con fecha anterior
+  /// al último ajuste de caja no suma a la caja disponible, porque esa
+  /// plata ya estaba dentro del efectivo contado.
   Future<void> addPayment({
     required int layawayId,
     required List<PaymentLineInput> paymentLines,
     double commissionRate = 0,
+    DateTime? date,
   }) async {
     checkRate(commissionRate);
+    if (date != null && date.isAfter(DateTime.now())) {
+      throw StateError('La fecha del abono no puede ser futura.');
+    }
+    final when = date == null ? const Value<DateTime>.absent() : Value(date);
     await _db.transaction(() async {
       await _requireInProcess(layawayId);
       final total = paymentLines.fold<int>(0, (sum, l) => sum + l.amount);
@@ -277,6 +304,7 @@ class LayawaysRepository {
               totalAmount: Value(total),
               commissionRate: Value(commissionRate),
               commissionAmount: Value(commissionAmount),
+              date: when,
             ),
           );
 
@@ -299,6 +327,7 @@ class LayawaysRepository {
                 detail: Value('Abono apartado #$layawayId'),
                 refType: 'LAYAWAY',
                 refId: layawayId,
+                date: when,
               ),
             );
 
@@ -306,8 +335,89 @@ class LayawaysRepository {
           _db,
           line,
           detail: 'Pago directo desde abono apartado #$layawayId',
+          date: date,
         );
       }
+    });
+  }
+
+  /// Borra el apartado como si nunca hubiera pasado (para equivocaciones o
+  /// pruebas), con todo lo que generó:
+  /// - en proceso o facturado sin entregar: libera la reserva;
+  /// - facturado y entregado: la mercancía vuelve a sus lotes y existencias;
+  /// - devuelto o cancelado: inventario y plata ya estaban devueltos;
+  /// y en todos los casos borra los abonos (la plata sale de la caja/cuenta
+  /// por donde entró, se revierten los pagos directos a proveedor), sus
+  /// comisiones, la devolución y la venta que se generó al facturar.
+  Future<void> deleteLayaway(int layawayId) async {
+    await _db.transaction(() async {
+      final layaway =
+          await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
+      final items =
+          await (_db.select(_db.layawayItems)..where((i) => i.layawayId.equals(layawayId))).get();
+      final sale = layaway.saleId == null
+          ? null
+          : await (_db.select(_db.sales)..where((s) => s.id.equals(layaway.saleId!))).getSingleOrNull();
+
+      final reserved = layaway.state == 'IN_PROCESS' || (layaway.state == 'INVOICED' && !layaway.delivered);
+      if (reserved) {
+        await _releaseReservation(layawayId, layaway.warehouseId);
+      }
+      if (layaway.state == 'INVOICED' && layaway.delivered && sale != null) {
+        // Salió de verdad: los lotes consumidos y las existencias vuelven.
+        final saleItems = await (_db.select(_db.saleItems)..where((i) => i.saleId.equals(sale.id))).get();
+        for (final it in saleItems) {
+          final consumptions = await (_db.select(_db.saleItemLotConsumptions)
+                ..where((c) => c.saleItemId.equals(it.id)))
+              .get();
+          for (final c in consumptions) {
+            final lot = await (_db.select(_db.productLots)..where((l) => l.id.equals(c.lotId)))
+                .getSingleOrNull();
+            if (lot != null) {
+              await (_db.update(_db.productLots)..where((l) => l.id.equals(lot.id)))
+                  .write(ProductLotsCompanion(quantityRemaining: Value(lot.quantityRemaining + c.quantity)));
+            }
+          }
+          final stock = await (_db.select(_db.stock)
+                ..where((s) => s.productId.equals(it.productId) & s.warehouseId.equals(layaway.warehouseId)))
+              .getSingleOrNull();
+          if (stock != null) {
+            await (_db.update(_db.stock)..where((s) => s.id.equals(stock.id)))
+                .write(StockCompanion(quantity: Value(stock.quantity + it.quantity)));
+          }
+        }
+      }
+      await (_db.delete(_db.stockMovements)
+            ..where((m) => m.refType.equals('LAYAWAY') & m.refId.equals(layawayId)))
+          .go();
+
+      final payments =
+          await (_db.select(_db.payments)..where((p) => p.layawayId.equals(layawayId))).get();
+      if (payments.isNotEmpty) {
+        final ids = [for (final p in payments) p.id];
+        await (_db.delete(_db.paymentLines)..where((l) => l.paymentId.isIn(ids))).go();
+        await (_db.delete(_db.payments)..where((p) => p.id.isIn(ids))).go();
+      }
+      await (_db.delete(_db.cashMovements)
+            ..where((m) => m.refType.isIn(['LAYAWAY', 'LAYAWAY_RETURN']) & m.refId.equals(layawayId)))
+          .go();
+      await deleteDirectSupplierRows(
+        _db,
+        note: 'Pago directo desde abono apartado #$layawayId',
+        reversalPrefix: 'Reverso por devolución · Devolución apartado #$layawayId:',
+      );
+
+      await (_db.delete(_db.layawayReturns)..where((r) => r.layawayId.equals(layawayId))).go();
+      await (_db.update(_db.productionOrders)..where((o) => o.layawayId.equals(layawayId)))
+          .write(const ProductionOrdersCompanion(layawayId: Value(null)));
+      if (items.isNotEmpty) {
+        await (_db.delete(_db.layawayItems)..where((i) => i.layawayId.equals(layawayId))).go();
+      }
+      await (_db.delete(_db.layaways)..where((l) => l.id.equals(layawayId))).go();
+
+      // La venta generada al facturar (y su devolución, si la hubo). El
+      // inventario ya quedó resuelto arriba.
+      if (sale != null) await purgeSale(_db, sale, undoStock: false);
     });
   }
 
@@ -452,6 +562,15 @@ class LayawaysRepository {
       }
       final number = (maxNumber + 1).toString().padLeft(4, '0');
 
+      // La venta queda con la fecha del último abono (cuando el saldo llegó
+      // a cero): así un apartado viejo que se sube y factura hoy no infla
+      // las ventas de hoy. En el uso normal, el último abono es de hoy.
+      final lastPayment = await (_db.select(_db.payments)
+            ..where((p) => p.layawayId.equals(layawayId))
+            ..orderBy([(p) => OrderingTerm.desc(p.date)])
+            ..limit(1))
+          .getSingleOrNull();
+
       final saleId = await _db.into(_db.sales).insert(
             SalesCompanion.insert(
               number: number,
@@ -462,6 +581,7 @@ class LayawaysRepository {
               state: const Value('CONFIRMED'),
               subtotal: Value(totals.total),
               total: Value(totals.total),
+              date: lastPayment == null ? const Value.absent() : Value(lastPayment.date),
             ),
           );
 

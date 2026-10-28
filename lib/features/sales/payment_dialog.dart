@@ -21,9 +21,12 @@ class _DraftLine {
 /// entregado de una vez (solo tiene sentido cuando se muestra esa opción,
 /// ver [showDeliveredOption]).
 class PaymentResult {
-  const PaymentResult({required this.lines, required this.delivered});
+  const PaymentResult({required this.lines, required this.delivered, this.date});
   final List<PaymentLineInput> lines;
   final bool delivered;
+
+  /// Fecha en que se recibió la plata (solo si se mostró [showDateOption]).
+  final DateTime? date;
 }
 
 Future<PaymentResult?> showPaymentDialog(
@@ -33,6 +36,7 @@ Future<PaymentResult?> showPaymentDialog(
   bool allowPartial = false,
   bool showDeliveredOption = false,
   bool showSupplierOption = false,
+  bool showDateOption = false,
 }) {
   return showDialog<PaymentResult>(
     context: context,
@@ -42,6 +46,7 @@ Future<PaymentResult?> showPaymentDialog(
       allowPartial: allowPartial,
       showDeliveredOption: showDeliveredOption,
       showSupplierOption: showSupplierOption,
+      showDateOption: showDateOption,
     ),
   );
 }
@@ -53,12 +58,14 @@ class _PaymentDialog extends ConsumerStatefulWidget {
     required this.allowPartial,
     required this.showDeliveredOption,
     required this.showSupplierOption,
+    required this.showDateOption,
   });
   final int totalToPay;
   final String title;
   final bool allowPartial;
   final bool showDeliveredOption;
   final bool showSupplierOption;
+  final bool showDateOption;
 
   @override
   ConsumerState<_PaymentDialog> createState() => _PaymentDialogState();
@@ -67,6 +74,7 @@ class _PaymentDialog extends ConsumerStatefulWidget {
 class _PaymentDialogState extends ConsumerState<_PaymentDialog> {
   final List<_DraftLine> _lines = [];
   bool _delivered = false;
+  DateTime _date = DateTime.now();
 
   int get _paid => _lines.fold(0, (sum, l) => sum + l.amount);
   int get _remaining => widget.totalToPay - _paid;
@@ -162,6 +170,42 @@ class _PaymentDialogState extends ConsumerState<_PaymentDialog> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
+              if (widget.showDateOption) ...[
+                const Divider(height: 24),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.event_outlined),
+                  title: const Text('Fecha en que se recibió'),
+                  subtitle: Text(
+                    '${_date.day.toString().padLeft(2, '0')}/'
+                    '${_date.month.toString().padLeft(2, '0')}/${_date.year}'
+                    '${DateUtils.isSameDay(_date, DateTime.now()) ? ' (hoy)' : ''}',
+                  ),
+                  trailing: const Icon(Icons.edit_calendar_outlined),
+                  onTap: () async {
+                    final now = DateTime.now();
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _date,
+                      firstDate: DateTime(2015),
+                      lastDate: now,
+                      helpText: 'Fecha del abono',
+                    );
+                    if (picked == null) return;
+                    // Hoy conserva la hora actual; un día pasado queda al
+                    // mediodía de ese día.
+                    setState(() => _date = DateUtils.isSameDay(picked, now)
+                        ? now
+                        : DateTime(picked.year, picked.month, picked.day, 12));
+                  },
+                ),
+                if (!DateUtils.isSameDay(_date, DateTime.now()))
+                  const Text(
+                    'Abono de una fecha pasada: si es anterior al último ajuste de caja, '
+                    'no se suma a la caja disponible (ya estaba en lo contado).',
+                    style: TextStyle(fontSize: 12),
+                  ),
+              ],
               if (widget.showDeliveredOption) ...[
                 const Divider(height: 24),
                 CheckboxListTile(
@@ -199,6 +243,7 @@ class _PaymentDialogState extends ConsumerState<_PaymentDialog> {
                               ))
                           .toList(),
                       delivered: _delivered,
+                      date: widget.showDateOption ? _date : null,
                     ),
                   );
                 }
