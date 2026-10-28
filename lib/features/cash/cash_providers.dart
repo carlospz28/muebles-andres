@@ -20,11 +20,18 @@ class CashRepository {
     String notes = '',
   }) async {
     final normalized = _startOfDay(date);
-    await _db.into(_db.cashSessions).insertOnConflictUpdate(
+    // La fecha es única: si ya se ajustó hoy, se actualiza esa misma fila
+    // (insertOnConflictUpdate solo mira el id y fallaba con "UNIQUE
+    // constraint failed: cash_sessions.date" al ajustar dos veces el día).
+    await _db.into(_db.cashSessions).insert(
           CashSessionsCompanion.insert(
             date: normalized,
             openingCash: Value(amount),
             notes: Value(notes),
+          ),
+          onConflict: DoUpdate(
+            (_) => CashSessionsCompanion(openingCash: Value(amount), notes: Value(notes)),
+            target: [_db.cashSessions.date],
           ),
         );
   }
