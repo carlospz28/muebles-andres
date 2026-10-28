@@ -465,8 +465,17 @@ class LayawaysRepository {
         }
       }
 
+      // Idempotente: si ya hay salidas de inventario de este apartado (se
+      // entregó antes), nunca se vuelve a descontar, aunque el indicador
+      // "entregado" se haya desmarcado y vuelto a marcar.
+      final alreadyFulfilled = await (_db.select(_db.stockMovements)
+            ..where((m) => m.refType.equals('LAYAWAY') & m.refId.equals(layawayId))
+            ..limit(1))
+          .getSingleOrNull();
+
       final shouldFulfill = delivered &&
           !layaway.delivered &&
+          alreadyFulfilled == null &&
           layaway.state == 'INVOICED' &&
           layaway.saleId != null;
 

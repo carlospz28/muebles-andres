@@ -32,6 +32,23 @@ void main() {
     });
   });
 
+  group('#14 entregar un apartado es idempotente', () {
+    test('marcar, desmarcar y volver a marcar "Entregado" descuenta una sola vez', () async {
+      final sofa = await shop.product('Sofá', stock: 3);
+      final (layawayId, _) = await shop.invoicedLayaway(sofa);
+
+      await shop.layaways.setDelivered(layawayId, true);
+      expect((await shop.stock(sofa)).quantity, 2);
+      expect(await shop.lotsRemaining(sofa), 2);
+
+      await shop.layaways.setDelivered(layawayId, false);
+      await shop.layaways.setDelivered(layawayId, true);
+      expect((await shop.stock(sofa)).quantity, 2, reason: 'antes bajaba a 1');
+      expect(await shop.lotsRemaining(sofa), 2);
+      expect((await shop.layaway(layawayId)).delivered, isTrue);
+    });
+  });
+
   group('#3 la devolución sale por las mismas formas de pago', () {
     late int accountId;
     late int supplierId;
