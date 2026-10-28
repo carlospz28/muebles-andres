@@ -362,7 +362,6 @@ class SalesRepository {
             .get();
 
         var consumedQty = 0;
-        var consumedCost = 0;
         for (final c in consumptions) {
           final lot = await (_db.select(_db.productLots)..where((l) => l.id.equals(c.lotId)))
               .getSingleOrNull();
@@ -387,30 +386,21 @@ class SalesRepository {
                 ),
               );
           consumedQty += c.quantity;
-          consumedCost += c.quantity * c.unitCost;
         }
 
-        // Unidades que se vendieron sin lote (#4): si salieron, vuelven
-        // como un lote nuevo con el mismo costo con que se costearon.
+        // Unidades que se vendieron sin lote (#4): si salieron, vuelven a
+        // las existencias (que habían quedado en negativo) SIN crear lote —
+        // nunca tuvieron uno; cuando se registre la compra que faltaba, esa
+        // compra crea su lote. Crear uno aquí dejaba más lotes que
+        // existencias.
         final withoutLot = it.quantity - consumedQty;
         if (wentOut && withoutLot > 0) {
-          final unitCost = ((it.costTotal - consumedCost) / withoutLot).round();
-          final lotId = await _db.into(_db.productLots).insert(
-                ProductLotsCompanion.insert(
-                  productId: it.productId,
-                  warehouseId: sale.warehouseId,
-                  quantityReceived: withoutLot,
-                  quantityRemaining: withoutLot,
-                  unitCost: unitCost < 0 ? 0 : unitCost,
-                ),
-              );
           await _db.into(_db.stockMovements).insert(
                 StockMovementsCompanion.insert(
                   productId: it.productId,
                   warehouseId: sale.warehouseId,
                   type: 'IN',
                   quantity: withoutLot,
-                  lotId: Value(lotId),
                   refType: 'SALE_RETURN',
                   refId: saleId,
                   note: Value('Devolución venta ${sale.number} (unidades vendidas sin lote)'),

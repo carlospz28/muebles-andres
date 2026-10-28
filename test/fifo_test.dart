@@ -54,7 +54,7 @@ void main() {
       expect((await shop.stock(mesa)).quantity, -1, reason: 'antes no se registraba la salida');
     });
 
-    test('devolver una venta con unidades sin lote las regresa como un lote con su costo', () async {
+    test('devolver una venta con unidades sin lote deja existencias y lotes cuadrados', () async {
       final sofa = await shop.product('Sofá', stock: 1, unitCost: 600000);
       final saleId = await shop.sale(sofa, qty: 2, price: 1000000);
       expect((await shop.stock(sofa)).quantity, -1);
@@ -62,7 +62,8 @@ void main() {
       await shop.sales.confirmReturn(saleId: saleId, reason: 'Defecto');
 
       expect((await shop.stock(sofa)).quantity, 1);
-      expect(await shop.lotsRemaining(sofa), 1 + 1, reason: 'lote original + lote de la unidad sin lote');
+      expect(await shop.lotsRemaining(sofa), 1,
+          reason: 'vuelve el lote original; la unidad sin lote no crea lote (antes quedaban 2 lotes y 1 en existencias)');
     });
 
     test('entregar un apartado sin inventario también avisa y costea', () async {
