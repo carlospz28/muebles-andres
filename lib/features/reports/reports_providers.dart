@@ -1,3 +1,4 @@
+import 'package:async/async.dart';
 import 'package:drift/drift.dart' hide Column;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -88,45 +89,99 @@ final salesByPeriodProvider = StreamProvider.autoDispose<List<DaySales>>((ref) {
 /// debería ver un dueño de negocio: no solo cuánto vendió, sino cuánto
 /// le quedó.
 class ProfitSummary {
-  const ProfitSummary({required this.netSales, required this.cost});
+  const ProfitSummary({
+    required this.netSales,
+    required this.cost,
+    this.expenses = 0,
+    this.commissions = 0,
+  });
+
+  /// Ventas confirmadas del periodo (por fecha de venta, incluidas las que
+  /// salen de facturar un apartado) menos devoluciones del periodo (por
+  /// fecha de devolución).
   final int netSales;
+
+  /// Costo FIFO de esas ventas menos el costo de lo devuelto en el periodo.
   final int cost;
+  final int expenses;
+  final int commissions;
+
+  /// Utilidad bruta: ventas netas − costo.
   int get utility => netSales - cost;
+
+  /// Utilidad: ventas netas − costo − gastos − comisiones.
+  int get netProfit => utility - expenses - commissions;
   double get marginPct => netSales == 0 ? 0 : (utility / netSales) * 100;
 }
+
+/// Regla ÚNICA de utilidad del periodo [start, end), usada por Análisis,
+/// Inicio y Finanzas para que nunca den números distintos:
+/// - ventas netas = ventas confirmadas del periodo − devoluciones del
+///   periodo (una venta y su devolución en el mismo periodo se anulan; un
+///   periodo ya pasado no cambia cuando la devolución llega después);
+/// - costo = costo FIFO de esas ventas − costo de lo devuelto;
+/// - gastos del periodo y comisiones ganadas en el periodo.
+Future<ProfitSummary> loadProfit(AppDatabase db, DateTime start, DateTime end) async {
+  final saleRows = await (db.select(db.saleItems).join([
+    innerJoin(db.sales, db.sales.id.equalsExp(db.saleItems.saleId)),
+  ])
+        ..where(db.sales.state.equals('CONFIRMED') &
+            db.sales.date.isBiggerOrEqualValue(start) &
+            db.sales.date.isSmallerThanValue(end)))
+      .get();
+  final salesTotal = (await (db.select(db.sales)
+            ..where((s) =>
+                s.state.equals('CONFIRMED') &
+                s.date.isBiggerOrEqualValue(start) &
+                s.date.isSmallerThanValue(end)))
+          .get())
+      .fold<int>(0, (a, s) => a + s.total);
+  final salesCost = saleRows.fold<int>(0, (a, r) => a + r.readTable(db.saleItems).costTotal);
+
+  final returns = await (db.select(db.saleReturns)
+        ..where((r) =>
+            r.state.equals('CONFIRMED') &
+            r.date.isBiggerOrEqualValue(start) &
+            r.date.isSmallerThanValue(end)))
+      .get();
+  final returnedAmount = returns.fold<int>(0, (a, r) => a + r.refundAmount);
+  var returnedCost = 0;
+  for (final r in returns) {
+    final items = await (db.select(db.saleItems)..where((i) => i.saleId.equals(r.saleId))).get();
+    returnedCost += items.fold<int>(0, (a, i) => a + i.costTotal);
+  }
+
+  final expenseRow = await (db.selectOnly(db.expenses)
+        ..addColumns([db.expenses.amount.sum()])
+        ..where(db.expenses.date.isBiggerOrEqualValue(start) & db.expenses.date.isSmallerThanValue(end)))
+      .getSingle();
+  final commissions = (await _earnedCommissionsByEmployee(db, start: start, end: end))
+      .values
+      .fold<int>(0, (a, v) => a + v);
+
+  return ProfitSummary(
+    netSales: salesTotal - returnedAmount,
+    cost: salesCost - returnedCost,
+    expenses: expenseRow.read(db.expenses.amount.sum()) ?? 0,
+    commissions: commissions,
+  );
+}
+
+/// Cambios que afectan la utilidad: además del libro de caja, el costo de
+/// un apartado se registra al entregarlo (sin movimiento de caja).
+Stream<void> profitTrigger(AppDatabase db) => StreamGroup.merge<void>([
+      _cashMovementsTrigger(db),
+      db.select(db.sales).watch().map((_) {}),
+      db.select(db.saleItems).watch().map((_) {}),
+      db.select(db.saleReturns).watch().map((_) {}),
+      db.select(db.expenses).watch().map((_) {}),
+    ]);
 
 final profitSummaryProvider = StreamProvider.autoDispose<ProfitSummary>((ref) {
   final db = ref.watch(databaseProvider);
   final period = ref.watch(reportPeriodProvider);
-
-  Future<ProfitSummary> load() async {
-    final (start, end) = periodRange(period);
-
-    final salesRow = await (db.selectOnly(db.cashMovements)
-          ..addColumns([db.cashMovements.amount.sum()])
-          ..where(db.cashMovements.type.isIn(['SALE', 'SALE_REFUND']) &
-              db.cashMovements.date.isBiggerOrEqualValue(start) &
-              db.cashMovements.date.isSmallerThanValue(end)))
-        .getSingle();
-    final netSales = salesRow.read(db.cashMovements.amount.sum()) ?? 0;
-
-    // El costo no se revierte al devolver (la venta original se marca
-    // isReturn, no se borra), así que se excluye para no inflar el costo
-    // de un ingreso que ya se descontó arriba.
-    final query = db.select(db.saleItems).join([
-      innerJoin(db.sales, db.sales.id.equalsExp(db.saleItems.saleId)),
-    ])
-      ..where(db.sales.state.equals('CONFIRMED') &
-          db.sales.isReturn.equals(false) &
-          db.sales.date.isBiggerOrEqualValue(start) &
-          db.sales.date.isSmallerThanValue(end));
-    final rows = await query.get();
-    final cost = rows.fold<int>(0, (sum, row) => sum + row.readTable(db.saleItems).costTotal);
-
-    return ProfitSummary(netSales: netSales, cost: cost);
-  }
-
-  return _cashMovementsTrigger(db).asyncMap((_) => load());
+  final (start, end) = periodRange(period);
+  return profitTrigger(db).asyncMap((_) => loadProfit(db, start, end));
 });
 
 class ProductSales {
