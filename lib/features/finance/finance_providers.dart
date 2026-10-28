@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
+import '../reports/reports_providers.dart' show loadProfit;
 
 /// Módulo de Finanzas (Flujo de caja, Estado de resultados, Balance y
 /// Activos fijos), traducido del módulo de "Muebles Gestor" pero calculado
@@ -21,7 +22,9 @@ Stream<void> _financeTrigger(AppDatabase db) => StreamGroup.merge<void>([
       db.select(db.cashMovements).watch().map((_) {}),
       db.select(db.cashSessions).watch().map((_) {}),
       db.select(db.sales).watch().map((_) {}),
+      db.select(db.saleItems).watch().map((_) {}),
       db.select(db.saleReturns).watch().map((_) {}),
+      db.select(db.expenses).watch().map((_) {}),
       db.select(db.layaways).watch().map((_) {}),
       db.select(db.payments).watch().map((_) {}),
       db.select(db.purchases).watch().map((_) {}),
@@ -247,10 +250,10 @@ final incomeStatementProvider = StreamProvider.autoDispose<IncomeStatementData>(
         .get();
     final totalReturns = returns.fold<int>(0, (a, r) => a + r.refundAmount);
 
-    // Costo FIFO real de cada ítem. Las ventas devueltas no suman costo:
-    // la mercancía volvió al inventario (igual que en Análisis).
+    // Costo FIFO real de cada ítem, por fecha de venta. Lo devuelto se resta
+    // en la fecha de la devolución (regla única de loadProfit, la misma de
+    // Análisis e Inicio).
     final saleIds = {for (final s in sales) s.id};
-    final returnedIds = {for (final s in sales) if (s.isReturn) s.id};
     final saleById = {for (final s in sales) s.id: s};
     final items = saleIds.isEmpty
         ? <TypedResult>[]
@@ -260,14 +263,12 @@ final incomeStatementProvider = StreamProvider.autoDispose<IncomeStatementData>(
                 ..where(db.saleItems.saleId.isIn(saleIds)))
             .get();
 
-    var cost = 0;
     final costByDay = <DateTime, int>{};
     final byProduct = <String, ProductResult>{};
     for (final r in items) {
       final it = r.readTable(db.saleItems);
       final p = r.readTable(db.products);
-      final itemCost = returnedIds.contains(it.saleId) ? 0 : it.costTotal;
-      cost += itemCost;
+      final itemCost = it.costTotal;
       final d = dayStart(saleById[it.saleId]!.date);
       costByDay[d] = (costByDay[d] ?? 0) + itemCost;
       final prev = byProduct[p.name];
@@ -296,7 +297,7 @@ final incomeStatementProvider = StreamProvider.autoDispose<IncomeStatementData>(
       period: effective,
       grossSales: gross,
       totalReturns: totalReturns,
-      costOfSales: cost,
+      costOfSales: (await loadProfit(db, start, end)).cost,
       salesByDay: [for (final d in days) DayResult(d, salesByDayMap[d]!, costByDay[d] ?? 0)],
       productRows: byProduct.values.toList()..sort((a, b) => a.name.compareTo(b.name)),
       undeliveredLayawaySales: undeliveredInPeriod,

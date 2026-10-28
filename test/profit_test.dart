@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:muebles_andres/core/db/database.dart';
 import 'package:muebles_andres/core/providers.dart';
 import 'package:muebles_andres/features/expenses/expenses_providers.dart';
+import 'package:muebles_andres/features/finance/finance_providers.dart';
 import 'package:muebles_andres/features/home/home_screen.dart';
 import 'package:muebles_andres/features/reports/reports_providers.dart';
 
@@ -77,5 +78,26 @@ void main() {
     // El flujo neto es plata: entró 1.000.000 + 800.000 + 300.000, salió
     // 300.000 (devolución) + 70.000 (gasto). La comisión aún no se paga.
     expect(home.netProfitPeriod, 1000000 + 800000 + 300000 - 300000 - 70000);
+  });
+
+  test('#5 (PC) Inicio, Análisis y Finanzas dan la misma utilidad en el mismo escenario', () async {
+    await buildScenario(shop);
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
+    addTearDown(container.dispose);
+    container.read(reportPeriodProvider.notifier).state = ReportPeriod.month;
+    final now = DateTime.now();
+    final monthStart = DateTime(now.year, now.month, 1);
+    container.read(incomePeriodProvider.notifier).state =
+        IncomePeriod(IncomeMode.month, monthStart, DateTime(now.year, now.month + 1, 0));
+
+    final home = await container.read(homeTotalsProvider.future);
+    final analysis = await container.read(profitSummaryProvider.future);
+    final finance = await container.read(incomeStatementProvider.future);
+
+    expect(finance.netSales, expectedNetSales);
+    expect(finance.costOfSales, expectedCost, reason: 'antes Finanzas excluía del costo la venta devuelta');
+    expect(finance.grossProfit, analysis.utility);
+    expect(finance.grossProfit, home.profit.utility);
+    expect(home.profit.netProfit, analysis.netProfit);
   });
 }
