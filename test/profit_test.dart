@@ -80,6 +80,22 @@ void main() {
     expect(home.netProfitPeriod, 1000000 + 800000 + 300000 - 300000 - 70000);
   });
 
+  test('#5 Inicio: "Ventas de hoy" y "Ventas del periodo" incluyen el apartado facturado', () async {
+    await buildScenario(shop);
+    final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
+    addTearDown(container.dispose);
+    container.read(reportPeriodProvider.notifier).state = ReportPeriod.month;
+
+    final home = await container.read(homeTotalsProvider.future);
+    final analysis = await container.read(profitSummaryProvider.future);
+
+    // Antes solo sumaba la plata de ventas directas (1.000.000 + 300.000
+    // − 300.000) y dejaba por fuera el apartado facturado de 800.000.
+    expect(home.salesPeriod, expectedNetSales);
+    expect(home.salesPeriod, analysis.netSales);
+    expect(home.salesToday, expectedNetSales, reason: 'todo el escenario ocurre hoy');
+  });
+
   test('#5 (PC) Inicio, Análisis y Finanzas dan la misma utilidad en el mismo escenario', () async {
     await buildScenario(shop);
     final container = ProviderContainer(overrides: [databaseProvider.overrideWithValue(shop.db)]);
@@ -95,6 +111,7 @@ void main() {
     final finance = await container.read(incomeStatementProvider.future);
 
     expect(finance.netSales, expectedNetSales);
+    expect(finance.netSales, home.salesPeriod, reason: 'las ventas de Inicio también coinciden');
     expect(finance.costOfSales, expectedCost, reason: 'antes Finanzas excluía del costo la venta devuelta');
     expect(finance.grossProfit, analysis.utility);
     expect(finance.grossProfit, home.profit.utility);

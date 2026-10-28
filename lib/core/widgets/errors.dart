@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 String friendlyError(Object e) {
   if (e is StateError) return e.message;
   if (e is ArgumentError) return '${e.message}';
+  if (e is Exception) return e.toString().replaceFirst('Exception: ', '');
   return '$e';
 }
 
