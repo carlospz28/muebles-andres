@@ -8,10 +8,13 @@ import 'package:muebles_andres/features/sales/sales_providers.dart';
 /// Escenario de prueba sobre una base EN MEMORIA, armado con los mismos
 /// repositorios que usa la app.
 class TestShop {
+  /// Con claves foráneas activas, igual que la base real de la app.
   TestShop()
       : db = (() {
           driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
-          return AppDatabase.forTesting(NativeDatabase.memory());
+          return AppDatabase.forTesting(
+            NativeDatabase.memory(setup: (raw) => raw.execute('PRAGMA foreign_keys = ON;')),
+          );
         })();
 
   final AppDatabase db;

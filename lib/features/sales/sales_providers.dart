@@ -156,6 +156,31 @@ class SalesRepository {
     );
   }
 
+  /// Solo una venta en borrador se puede modificar (una confirmada ya movió
+  /// plata e inventario).
+  Future<void> _requireDraft(int saleId) async {
+    final sale = await (_db.select(_db.sales)..where((s) => s.id.equals(saleId))).getSingle();
+    if (sale.state != 'DRAFT') {
+      throw StateError('La venta ${sale.number} ya está confirmada: no se puede modificar.');
+    }
+  }
+
+  Future<void> _insertItem(int saleId, int? kitId, KitLine l) async {
+    checkLine(quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount);
+    await _db.into(_db.saleItems).insert(
+          SaleItemsCompanion.insert(
+            saleId: saleId,
+            productId: l.productId,
+            kitId: Value(kitId),
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discount: Value(l.discount),
+            lineTotal: Value(l.total),
+          ),
+        );
+  }
+
+  /// Agrega una línea y recalcula los totales, todo o nada.
   Future<void> addItem({
     required int saleId,
     required int productId,
@@ -164,47 +189,44 @@ class SalesRepository {
     int discount = 0,
     int? kitId,
   }) async {
+    final line = KitLine(productId: productId, quantity: quantity, unitPrice: unitPrice, discount: discount);
     checkLine(quantity: quantity, unitPrice: unitPrice, discount: discount);
-    await _db.into(_db.saleItems).insert(
-          SaleItemsCompanion.insert(
-            saleId: saleId,
-            productId: productId,
-            kitId: Value(kitId),
-            quantity: quantity,
-            unitPrice: unitPrice,
-            discount: Value(discount),
-            lineTotal: Value(quantity * unitPrice - discount),
-          ),
-        );
-    await _recalcTotals(saleId);
+    return _db.transaction(() async {
+      await _requireDraft(saleId);
+      await _insertItem(saleId, kitId, line);
+      await _recalcTotals(saleId);
+    });
   }
 
-  /// Agrega todas las líneas de un kit. El kit debe quedar con precio
-  /// final mayor que cero.
+  /// Agrega todas las líneas de un kit en una sola transacción (si una
+  /// falla, no queda ninguna). El kit debe quedar con precio final > 0.
   Future<void> addKitLines({required int saleId, required int kitId, required List<KitLine> lines}) async {
     checkKitLines(lines);
-    for (final l in lines) {
-      await addItem(
-        saleId: saleId,
-        productId: l.productId,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        discount: l.discount,
-        kitId: kitId,
-      );
-    }
+    return _db.transaction(() async {
+      await _requireDraft(saleId);
+      for (final l in lines) {
+        await _insertItem(saleId, kitId, l);
+      }
+      await _recalcTotals(saleId);
+    });
   }
 
   Future<void> removeItem(int itemId, int saleId) async {
-    await (_db.delete(_db.saleItems)..where((i) => i.id.equals(itemId))).go();
-    await _recalcTotals(saleId);
+    return _db.transaction(() async {
+      await _requireDraft(saleId);
+      await (_db.delete(_db.saleItems)..where((i) => i.id.equals(itemId) & i.saleId.equals(saleId))).go();
+      await _recalcTotals(saleId);
+    });
   }
 
   Future<void> setCommissionRate(int saleId, double rate) async {
     checkRate(rate);
-    await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
-        .write(SalesCompanion(commissionRate: Value(rate)));
-    await _recalcTotals(saleId);
+    return _db.transaction(() async {
+      await _requireDraft(saleId);
+      await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
+          .write(SalesCompanion(commissionRate: Value(rate)));
+      await _recalcTotals(saleId);
+    });
   }
 
   Future<void> setDelivered(int saleId, bool delivered) async {
