@@ -5,6 +5,7 @@ import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
 import '../../core/pdf/receipt_pdf.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/errors.dart';
 import '../inventory/catalog_providers.dart';
 import '../kits/kit_picker_dialog.dart';
 import '../sales/payment_dialog.dart';
@@ -134,10 +135,7 @@ class LayawayFormScreen extends ConsumerWidget {
                         );
                       }
                     } catch (e) {
-                      if (dialogContext.mounted) {
-                        ScaffoldMessenger.of(dialogContext)
-                            .showSnackBar(SnackBar(content: Text('$e')));
-                      }
+                      if (dialogContext.mounted) showErrorSnack(dialogContext, e);
                     }
                   },
                   child: const Text('Agregar'),
@@ -154,21 +152,15 @@ class LayawayFormScreen extends ConsumerWidget {
     if (picked == null) return;
 
     var totalShortage = 0;
-    for (final item in picked.items) {
-      try {
-        totalShortage += await ref.read(layawaysRepositoryProvider).addItem(
-              layawayId: layawayId,
-              productId: item.productId,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              discount: item.discount,
-              kitId: picked.kitId,
-            );
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-        }
-      }
+    try {
+      totalShortage = await ref.read(layawaysRepositoryProvider).addKitLines(
+            layawayId: layawayId,
+            kitId: picked.kitId,
+            lines: [for (final i in picked.items) i.toKitLine()],
+          );
+    } catch (e) {
+      if (context.mounted) showErrorSnack(context, e);
+      return;
     }
     if (totalShortage > 0 && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -235,11 +227,15 @@ class LayawayFormScreen extends ConsumerWidget {
       ),
     );
 
-    await ref.read(layawaysRepositoryProvider).addPayment(
-          layawayId: layawayId,
-          paymentLines: result.lines,
-          commissionRate: rate ?? 0,
-        );
+    if (!context.mounted) return;
+    await runOrShowError(
+      context,
+      () => ref.read(layawaysRepositoryProvider).addPayment(
+            layawayId: layawayId,
+            paymentLines: result.lines,
+            commissionRate: rate ?? 0,
+          ),
+    );
   }
 
   Future<void> _invoice(BuildContext context, WidgetRef ref) async {

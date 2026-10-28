@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/errors.dart';
+import '../reports/reports_providers.dart' show pendingCommission;
 
 final customersStreamProvider = StreamProvider.autoDispose<List<Customer>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -101,6 +103,29 @@ final accountBalancesProvider = StreamProvider.autoDispose<List<AccountBalance>>
     return [for (final a in accounts) AccountBalance(a, balances[a.id] ?? 0)];
   });
 });
+
+/// Saldo de una cuenta de consignación (misma regla de
+/// [accountBalancesProvider]): lo que entró por consignación menos lo que
+/// se pagó a proveedores desde ella, los retiros y los gastos pagados con
+/// ella.
+Future<int> accountBalance(AppDatabase db, int accountId) async {
+  Future<int> sum(Future<List<int>> amounts) async => (await amounts).fold<int>(0, (a, b) => a + b);
+  final inLines = await sum((db.select(db.paymentLines)
+        ..where((l) => l.method.equals('CONSIGNMENT') & l.accountId.equals(accountId)))
+      .map((l) => l.amount)
+      .get());
+  final toSuppliers = await sum((db.select(db.supplierPayments)
+        ..where((p) => p.method.equals('CONSIGNMENT') & p.accountId.equals(accountId)))
+      .map((p) => p.amount)
+      .get());
+  final withdrawals = await sum(
+      (db.select(db.accountWithdrawals)..where((w) => w.accountId.equals(accountId))).map((w) => w.amount).get());
+  final expenses = await sum((db.select(db.expenses)
+        ..where((e) => e.method.equals('CONSIGNMENT') & e.accountId.equals(accountId)))
+      .map((e) => e.amount)
+      .get());
+  return inLines - toSuppliers - withdrawals - expenses;
+}
 
 class AccountMovement {
   const AccountMovement({
@@ -304,6 +329,7 @@ class PeopleRepository {
     String? document,
     double defaultCommissionRate = 0,
   }) async {
+    checkRate(defaultCommissionRate);
     if (id == null) {
       return _db.into(_db.employees).insert(
             EmployeesCompanion.insert(
@@ -336,6 +362,11 @@ class PeopleRepository {
     required int amount,
     String note = '',
   }) async {
+    if (amount <= 0) throw StateError('El pago debe ser mayor que cero.');
+    final pending = await pendingCommission(_db, employeeId);
+    if (amount > pending) {
+      throw StateError('No se puede pagar más de lo pendiente (\$$pending).');
+    }
     await _db.into(_db.cashMovements).insert(
           CashMovementsCompanion.insert(
             type: 'COMMISSION_PAYMENT',
@@ -419,7 +450,12 @@ class PeopleRepository {
     required int amount,
     String note = '',
   }) async {
+    if (amount <= 0) throw StateError('El retiro debe ser mayor que cero.');
     await _db.transaction(() async {
+      final balance = await accountBalance(_db, accountId);
+      if (amount > balance) {
+        throw StateError('No se puede retirar más del saldo de la cuenta (\$$balance).');
+      }
       await _db.into(_db.accountWithdrawals).insert(
             AccountWithdrawalsCompanion.insert(
               accountId: accountId,

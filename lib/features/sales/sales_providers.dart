@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/errors.dart';
 
 final salesStreamProvider = StreamProvider.autoDispose<List<Sale>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -78,6 +79,27 @@ class PaymentLineInput {
   final int? supplierId;
 }
 
+/// Una línea de un kit ya repartida (precio y descuento de cada componente).
+class KitLine {
+  const KitLine({required this.productId, required this.quantity, required this.unitPrice, this.discount = 0});
+  final int productId;
+  final int quantity;
+  final int unitPrice;
+  final int discount;
+  int get total => quantity * unitPrice - discount;
+}
+
+/// Un kit no puede quedar gratis ni con líneas inválidas.
+void checkKitLines(List<KitLine> lines) {
+  if (lines.isEmpty) throw StateError('El kit no tiene componentes seleccionados.');
+  for (final l in lines) {
+    checkLine(quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount);
+  }
+  if (lines.fold<int>(0, (a, l) => a + l.total) <= 0) {
+    throw StateError('El precio final del kit debe ser mayor que cero.');
+  }
+}
+
 class SalesRepository {
   SalesRepository(this._db);
   final AppDatabase _db;
@@ -142,6 +164,7 @@ class SalesRepository {
     int discount = 0,
     int? kitId,
   }) async {
+    checkLine(quantity: quantity, unitPrice: unitPrice, discount: discount);
     await _db.into(_db.saleItems).insert(
           SaleItemsCompanion.insert(
             saleId: saleId,
@@ -156,12 +179,29 @@ class SalesRepository {
     await _recalcTotals(saleId);
   }
 
+  /// Agrega todas las líneas de un kit. El kit debe quedar con precio
+  /// final mayor que cero.
+  Future<void> addKitLines({required int saleId, required int kitId, required List<KitLine> lines}) async {
+    checkKitLines(lines);
+    for (final l in lines) {
+      await addItem(
+        saleId: saleId,
+        productId: l.productId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        discount: l.discount,
+        kitId: kitId,
+      );
+    }
+  }
+
   Future<void> removeItem(int itemId, int saleId) async {
     await (_db.delete(_db.saleItems)..where((i) => i.id.equals(itemId))).go();
     await _recalcTotals(saleId);
   }
 
   Future<void> setCommissionRate(int saleId, double rate) async {
+    checkRate(rate);
     await (_db.update(_db.sales)..where((s) => s.id.equals(saleId)))
         .write(SalesCompanion(commissionRate: Value(rate)));
     await _recalcTotals(saleId);

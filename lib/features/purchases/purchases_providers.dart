@@ -74,6 +74,23 @@ final purchasesStreamProvider = StreamProvider.autoDispose<List<Purchase>>((ref)
       .watch();
 });
 
+/// Lo que se le debe hoy a un proveedor (misma regla de
+/// [supplierBalancesProvider]): deuda inicial + compras confirmadas − lo
+/// pagado al confirmarlas − abonos sueltos (incluye pagos directos de
+/// clientes y sus reversos).
+Future<int> supplierDebt(AppDatabase db, int supplierId) async {
+  final supplier = await (db.select(db.suppliers)..where((s) => s.id.equals(supplierId))).getSingle();
+  final purchases = await (db.select(db.purchases)
+        ..where((p) => p.supplierId.equals(supplierId) & p.state.equals('CONFIRMED')))
+      .get();
+  final standalone = await (db.select(db.supplierPayments)
+        ..where((p) => p.supplierId.equals(supplierId) & p.purchaseId.isNull()))
+      .get();
+  return supplier.openingBalance +
+      purchases.fold<int>(0, (a, p) => a + p.total - p.paidAmount) -
+      standalone.fold<int>(0, (a, p) => a + p.amount);
+}
+
 class PurchaseListItem {
   PurchaseListItem(this.purchase, this.supplierName);
   final Purchase purchase;
@@ -300,7 +317,15 @@ class PurchasesRepository {
     required int supplierId,
     required List<PaymentLineInput> paymentLines,
   }) async {
+    if (paymentLines.isEmpty || paymentLines.any((l) => l.amount <= 0)) {
+      throw StateError('Cada pago debe ser mayor que cero.');
+    }
     await _db.transaction(() async {
+      final debt = await supplierDebt(_db, supplierId);
+      final total = paymentLines.fold<int>(0, (a, l) => a + l.amount);
+      if (total > debt) {
+        throw StateError('No se puede abonar más de lo que se le debe al proveedor (\$$debt).');
+      }
       for (final line in paymentLines) {
         await _db.into(_db.supplierPayments).insert(
               SupplierPaymentsCompanion.insert(

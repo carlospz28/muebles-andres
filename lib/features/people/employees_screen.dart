@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/widgets/errors.dart';
 import '../../core/db/database.dart';
 import 'people_providers.dart';
 
@@ -57,13 +58,16 @@ class EmployeesScreen extends ConsumerWidget {
             onPressed: () async {
               final name = nameCtrl.text.trim();
               if (name.isEmpty) return;
-              await ref.read(peopleRepositoryProvider).saveEmployee(
-                    id: employee?.id,
-                    name: name,
-                    document: docCtrl.text.trim().isEmpty ? null : docCtrl.text.trim(),
-                    defaultCommissionRate: double.tryParse(rateCtrl.text.trim()) ?? 0,
-                  );
-              if (context.mounted) Navigator.pop(context);
+              final ok = await runOrShowError(
+                context,
+                () => ref.read(peopleRepositoryProvider).saveEmployee(
+                      id: employee?.id,
+                      name: name,
+                      document: docCtrl.text.trim().isEmpty ? null : docCtrl.text.trim(),
+                      defaultCommissionRate: double.tryParse(rateCtrl.text.trim()) ?? 0,
+                    ),
+              );
+              if (ok && context.mounted) Navigator.pop(context);
             },
             child: const Text('Guardar'),
           ),

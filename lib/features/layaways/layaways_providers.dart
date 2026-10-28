@@ -4,7 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/providers.dart';
-import '../sales/sales_providers.dart'     show PaymentLineInput, UncostedUnits, consumeItemFifo, creditSupplierIfDirectPayment, refundPaymentLines;
+import '../../core/widgets/errors.dart';
+import '../sales/sales_providers.dart'
+    show
+        KitLine,
+        PaymentLineInput,
+        UncostedUnits,
+        checkKitLines,
+        consumeItemFifo,
+        creditSupplierIfDirectPayment,
+        refundPaymentLines;
 
 final layawaysStreamProvider = StreamProvider.autoDispose<List<Layaway>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -155,6 +164,7 @@ class LayawaysRepository {
     int discount = 0,
     int? kitId,
   }) async {
+    checkLine(quantity: quantity, unitPrice: unitPrice, discount: discount);
     final layaway =
         await (_db.select(_db.layaways)..where((l) => l.id.equals(layawayId))).getSingle();
 
@@ -194,6 +204,24 @@ class LayawaysRepository {
     return shortage;
   }
 
+  /// Agrega todas las líneas de un kit. Devuelve cuántas unidades faltan
+  /// por conseguir. El kit debe quedar con precio final mayor que cero.
+  Future<int> addKitLines({required int layawayId, required int kitId, required List<KitLine> lines}) async {
+    checkKitLines(lines);
+    var shortage = 0;
+    for (final l in lines) {
+      shortage += await addItem(
+        layawayId: layawayId,
+        productId: l.productId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        discount: l.discount,
+        kitId: kitId,
+      );
+    }
+    return shortage;
+  }
+
   Future<void> removeItem(int itemId) async {
     final item =
         await (_db.select(_db.layawayItems)..where((i) => i.id.equals(itemId))).getSingle();
@@ -223,6 +251,7 @@ class LayawaysRepository {
     required List<PaymentLineInput> paymentLines,
     double commissionRate = 0,
   }) async {
+    checkRate(commissionRate);
     await _db.transaction(() async {
       final total = paymentLines.fold<int>(0, (sum, l) => sum + l.amount);
       final commissionAmount = (total * commissionRate / 100).round();

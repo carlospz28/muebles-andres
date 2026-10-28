@@ -358,6 +358,19 @@ Future<Map<int, int>> _earnedCommissionsByEmployee(
   return totals;
 }
 
+/// Comisión pendiente de pago de un vendedor: lo ganado de siempre menos
+/// lo que ya se le pagó (misma regla de la pantalla Comisiones).
+Future<int> pendingCommission(AppDatabase db, int employeeId) async {
+  final earned = (await _earnedCommissionsByEmployee(db))[employeeId] ?? 0;
+  final paidRow = await (db.selectOnly(db.cashMovements)
+        ..addColumns([db.cashMovements.amount.sum()])
+        ..where(db.cashMovements.type.equals('COMMISSION_PAYMENT') &
+            db.cashMovements.refType.equals('EMPLOYEE') &
+            db.cashMovements.refId.equals(employeeId)))
+      .getSingle();
+  return earned + (paidRow.read(db.cashMovements.amount.sum()) ?? 0);
+}
+
 /// Suma de comisiones GANADAS por vendedor del periodo elegido (no
 /// descuenta pagos ya hechos — es "cuánto generó", para el resumen de
 /// Análisis). Para "cuánto le debo todavía", ver

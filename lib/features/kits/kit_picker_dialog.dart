@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/db/database.dart';
 import '../../core/format/currency_input_formatter.dart';
+import '../sales/sales_providers.dart' show KitLine;
 import 'kits_providers.dart';
 
 class KitPickResult {
@@ -16,6 +17,9 @@ class KitPickResult {
   final int quantity;
   final int unitPrice;
   final int discount;
+
+  KitLine toKitLine() =>
+      KitLine(productId: productId, quantity: quantity, unitPrice: unitPrice, discount: discount);
 }
 
 /// Deja elegir un kit y marcar/desmarcar sus componentes (ej. dejar el
