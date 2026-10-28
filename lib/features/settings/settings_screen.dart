@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -78,19 +80,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Listo'),
-        content: const Text(
-          'Se restauró la copia de seguridad. Ahora cierra la app '
-          'completamente (no solo minimizarla) y vuelve a abrirla para '
-          'ver la información restaurada.',
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Entendido'),
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Copia restaurada'),
+          content: Text(
+            'Se restauró la copia de seguridad. La app se va a cerrar; vuelve a '
+            'abrirla para ver la información restaurada.\n\n'
+            'Por si acaso, lo que había antes quedó guardado en:\n'
+            '${result.safetyBackupPath}',
           ),
-        ],
+          actions: [
+            FilledButton(
+              // La base quedó cerrada: no se puede seguir usando la app.
+              onPressed: () => exit(0),
+              child: const Text('Cerrar la app'),
+            ),
+          ],
+        ),
       ),
     );
   }
